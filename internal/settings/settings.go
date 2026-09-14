@@ -21,6 +21,7 @@ type Preferences struct {
 	WordWrap    bool    `json:"wordWrap"`
 	ViewMode    string  `json:"viewMode"`
 	PreviewSync bool    `json:"previewSync"`
+	PreviewZoom int     `json:"previewZoom"`
 	Split       float64 `json:"split"`
 }
 
@@ -30,7 +31,7 @@ type Config struct {
 }
 
 func Defaults() Config {
-	return Config{Preferences: Preferences{Theme: "dark", FontSize: 14, WordWrap: true, ViewMode: "split", PreviewSync: true, Split: 50}}
+	return Config{Preferences: Preferences{Theme: "dark", FontSize: 14, WordWrap: true, ViewMode: "split", PreviewSync: true, PreviewZoom: 100, Split: 50}}
 }
 
 func NormalizePreferences(preferences Preferences) Preferences {
@@ -43,6 +44,9 @@ func NormalizePreferences(preferences Preferences) Preferences {
 	}
 	if preferences.ViewMode != "editor" && preferences.ViewMode != "split" && preferences.ViewMode != "preview" {
 		preferences.ViewMode = defaults.ViewMode
+	}
+	if preferences.PreviewZoom < 50 || preferences.PreviewZoom > 200 {
+		preferences.PreviewZoom = defaults.PreviewZoom
 	}
 	if preferences.Split < 25 || preferences.Split > 75 {
 		preferences.Split = defaults.Split

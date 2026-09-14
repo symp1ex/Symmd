@@ -119,13 +119,28 @@ const defaultImageRule = markdown.renderer.rules.image
 markdown.renderer.rules.image = (tokens, index, options, env, self) => {
   const token = tokens[index]
   const source = token.attrGet('src') ?? ''
-  if (/^(https?:|file:|javascript:|\\\\|\/)/i.test(source)) {
-    token.attrSet('src', transparentPixel)
-    token.attrSet('data-blocked-src', source)
-    token.attrSet('title', 'Remote or absolute images are blocked')
-  } else if (!source.startsWith('data:image/')) {
+
+  let decodedSource = ''
+  try {
+    decodedSource = decodeURIComponent(source)
+  } catch {
+    // Malformed URL escaping is not a valid local resource reference.
+  }
+  const isRemoteImage = /^https?:\/\//i.test(source)
+  const isDataImage = /^data:image\/(?:gif|png|jpeg|webp);/i.test(source)
+  const isWindowsPath = /^[a-z]:[\\/]/i.test(decodedSource) || decodedSource.startsWith('\\\\')
+  const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(decodedSource)
+  const isLocalImage = decodedSource !== '' && (isWindowsPath || (!hasScheme && !decodedSource.startsWith('//')))
+
+  if (isRemoteImage || isDataImage) {
+    // markdown-it has already validated and normalized this image URL.
+  } else if (isLocalImage) {
     token.attrSet('src', transparentPixel)
     token.attrSet('data-resource-src', source)
+  } else {
+    token.attrSet('src', transparentPixel)
+    token.attrSet('data-blocked-src', source)
+    token.attrSet('title', 'Image source is blocked')
   }
   const renderer = defaultImageRule ?? ((items: Token[], tokenIndex: number, rendererOptions, _rendererEnv, rendererSelf) => rendererSelf.renderToken(items, tokenIndex, rendererOptions))
   return renderer(tokens, index, options, env, self)

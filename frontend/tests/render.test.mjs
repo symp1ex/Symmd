@@ -5,6 +5,7 @@ import { createServer } from 'vite'
 
 let server
 let renderMarkdown
+let nextPreviewZoom
 
 before(async () => {
   server = await createServer({
@@ -15,6 +16,7 @@ before(async () => {
     server: { middlewareMode: true },
   })
   ;({ renderMarkdown } = await server.ssrLoadModule('/src/markdown/render.ts'))
+  ;({ nextPreviewZoom } = await server.ssrLoadModule('/src/preview/zoom.ts'))
 })
 
 after(async () => {
@@ -63,13 +65,42 @@ test('removes one structural newline only from closed fenced blocks', () => {
   assert.match(renderMarkdown('```text\nunclosed\n'), /data-language="text">unclosed\n<\/code>/)
 })
 
-test('preserves inline code, task lists, and local image resolution metadata', () => {
+test('preserves inline code, task lists, and supported image sources', () => {
   const html = renderMarkdown('Use `<details>` here.\n\n- [x] done\n\n![local](images/example.png)\n\n![remote](https://example.com/image.png)')
   assert.match(html, /<code>&lt;details&gt;<\/code>/)
   assert.match(html, /<input type="checkbox" disabled checked>/)
   assert.match(html, /data-resource-src="images\/example\.png"/)
-  assert.match(html, /data-blocked-src="https:\/\/example\.com\/image\.png"/)
+  assert.match(html, /src="https:\/\/example\.com\/image\.png"/)
+  assert.doesNotMatch(html, /data-blocked-src="https:/)
   assert.doesNotMatch(html, /class="code-block"/)
+})
+
+test('routes local image paths through native resolution after markdown-it normalization', () => {
+  const html = renderMarkdown('![relative](images/test.png)\n\n![dot](./images/test.png)\n\n![parent](../shared/test.png)\n\n![windows-backslash](C:\\images\\test.png)\n\n![windows-slash](C:/images/test.png)\n\n![space](<images/test image.png>)\n\n![reference][image-ref]\n\n[image-ref]: ../shared/test%20image.png')
+  assert.match(html, /data-resource-src="images\/test\.png"/)
+  assert.match(html, /data-resource-src="\.\/images\/test\.png"/)
+  assert.match(html, /data-resource-src="\.\.\/shared\/test\.png"/)
+  assert.match(html, /data-resource-src="C:%5Cimages%5Ctest\.png"/)
+  assert.match(html, /data-resource-src="C:\/images\/test\.png"/)
+  assert.match(html, /data-resource-src="images\/test%20image\.png"/)
+  assert.match(html, /data-resource-src="\.\.\/shared\/test%20image\.png"/)
+})
+
+test('allows only HTTP(S) and markdown-it safe data image schemes directly', () => {
+  const html = renderMarkdown('![https](https://example.com/image.png)\n\n![http](http://example.com/image.png)\n\n![data](data:image/png;base64,AAAA)\n\n![unknown](ftp://example.com/image.png)\n\n![script](javascript:alert(1))')
+  assert.match(html, /src="https:\/\/example\.com\/image\.png"/)
+  assert.match(html, /src="http:\/\/example\.com\/image\.png"/)
+  assert.match(html, /src="data:image\/png;base64,AAAA"/)
+  assert.match(html, /data-blocked-src="ftp:\/\/example\.com\/image\.png"/)
+  assert.doesNotMatch(html, /<img[^>]+javascript:/i)
+})
+
+test('calculates preview zoom in fixed bounded steps', () => {
+  assert.equal(nextPreviewZoom(100, -1), 110)
+  assert.equal(nextPreviewZoom(100, 1), 90)
+  assert.equal(nextPreviewZoom(200, -1), 200)
+  assert.equal(nextPreviewZoom(50, 1), 50)
+  assert.equal(nextPreviewZoom(100, 0), 100)
 })
 
 test('keeps Markdown special characters escaped inside fences', () => {

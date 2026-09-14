@@ -12,6 +12,7 @@ export interface Preferences {
   wordWrap: boolean
   viewMode: 'editor' | 'split' | 'preview'
   previewSync: boolean
+  previewZoom: number
   split: number
 }
 

@@ -29,6 +29,7 @@ const (
 	wmNCHitTest     = 0x0084
 	wmNCDestroy     = 0x0082
 	wmClose         = 0x0010
+	wmSetIcon       = 0x0080
 	wmNCLButtonDown = 0x00A1
 	htClient        = 1
 	htCaption       = 2
@@ -40,6 +41,14 @@ const (
 	htBottom        = 15
 	htBottomLeft    = 16
 	htBottomRight   = 17
+	iconSmall       = 0
+	iconBig         = 1
+	imageIcon       = 1
+	lrShared        = 0x00008000
+	smCXIcon        = 11
+	smCYIcon        = 12
+	smCXSmallIcon   = 49
+	smCYSmallIcon   = 50
 )
 
 type point struct{ X, Y int32 }
@@ -65,6 +74,9 @@ var (
 	sendMessage      = user32.NewProc("SendMessageW")
 	copyMemory       = kernel32.NewProc("RtlMoveMemory")
 	setDPIAwareness  = user32.NewProc("SetProcessDpiAwarenessContext")
+	getSystemMetrics = user32.NewProc("GetSystemMetrics")
+	loadImage        = user32.NewProc("LoadImageW")
+	getModuleHandle  = kernel32.NewProc("GetModuleHandleW")
 	chromeOnce       sync.Once
 	chromeProc       uintptr
 	oldProcs         sync.Map
@@ -96,6 +108,31 @@ func applyWindowChrome(w webview.WebView, minWidth, minHeight int, onClose func(
 
 func ApplyChrome(w webview.WebView, minWidth, minHeight int, onClose func()) error {
 	return applyWindowChrome(w, minWidth, minHeight, onClose)
+}
+func ApplyIcon(w webview.WebView, resourceID uint) error {
+	hwnd := uintptr(w.Window())
+	if hwnd == 0 {
+		return errors.New("window HWND is empty")
+	}
+	module, _, _ := getModuleHandle.Call(0)
+	if module == 0 {
+		return errors.New("get application module handle")
+	}
+	load := func(widthMetric, heightMetric uintptr) uintptr {
+		width, _, _ := getSystemMetrics.Call(widthMetric)
+		height, _, _ := getSystemMetrics.Call(heightMetric)
+		icon, _, _ := loadImage.Call(module, uintptr(resourceID), imageIcon, width, height, lrShared)
+		return icon
+	}
+	bigIcon := load(smCXIcon, smCYIcon)
+	smallIcon := load(smCXSmallIcon, smCYSmallIcon)
+	if bigIcon == 0 || smallIcon == 0 {
+		return errors.New("load application icon resource")
+	}
+	// LR_SHARED handles are owned by the module cache and must not be destroyed.
+	sendMessage.Call(hwnd, wmSetIcon, iconBig, bigIcon)
+	sendMessage.Call(hwnd, wmSetIcon, iconSmall, smallIcon)
+	return nil
 }
 func Minimize(w webview.WebView)             { minimizeWindow(w) }
 func ToggleMaximized(w webview.WebView) bool { return toggleWindowMaximized(w) }

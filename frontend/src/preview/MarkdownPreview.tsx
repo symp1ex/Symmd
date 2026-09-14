@@ -41,9 +41,10 @@ interface Props {
   onError(message: string): void
   syncEnabled: boolean
   theme: 'dark' | 'light'
+  zoom: number
 }
 
-export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine, onOpenDocument, onError, syncEnabled, theme }: Props) {
+export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine, onOpenDocument, onError, syncEnabled, theme, zoom }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const syncingRef = useRef(false)
   const codeSourcesRef = useRef(new WeakMap<HTMLElement, string>())
@@ -138,8 +139,13 @@ export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine
           .then((file) => { if (file) onOpenDocument(file) })
           .catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
       }}
-      // Raw Markdown HTML is reduced to an attribute-free allowlist before it reaches this sink.
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    >
+      <div
+        className="markdown-preview__content"
+        style={{ zoom: zoom / 100 }}
+        // Raw Markdown HTML is reduced to an attribute-free allowlist before it reaches this sink.
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </article>
   )
 }

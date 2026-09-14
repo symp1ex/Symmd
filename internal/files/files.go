@@ -1,10 +1,13 @@
 package files
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"mime"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -68,31 +71,24 @@ func State(path string) (FileState, error) {
 }
 
 func ResourceDataURL(documentPath, reference string) (string, error) {
-	if documentPath == "" {
-		return "", errors.New("save the document before using relative resources")
-	}
 	parsed, err := url.Parse(reference)
 	if err != nil {
 		return "", fmt.Errorf("parse resource reference: %w", err)
 	}
-	if parsed.IsAbs() || parsed.Host != "" || parsed.Path == "" {
-		return "", errors.New("only local relative resources are supported")
-	}
-	decodedPath, err := url.PathUnescape(parsed.Path)
+	resourcePath, windowsAbsolute, err := resourcePath(parsed)
 	if err != nil {
-		return "", fmt.Errorf("decode resource path: %w", err)
+		return "", err
 	}
-	base, err := filepath.Abs(filepath.Dir(documentPath))
-	if err != nil {
-		return "", fmt.Errorf("resolve document directory: %w", err)
+	localPath := filepath.FromSlash(resourcePath)
+	if !windowsAbsolute && !filepath.IsAbs(localPath) {
+		if documentPath == "" {
+			return "", errors.New("save the document before using relative resources")
+		}
+		localPath = filepath.Join(filepath.Dir(documentPath), localPath)
 	}
-	target, err := filepath.Abs(filepath.Join(base, filepath.FromSlash(decodedPath)))
+	target, err := filepath.Abs(localPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve resource: %w", err)
-	}
-	rel, err := filepath.Rel(base, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errors.New("resource escapes the document directory")
 	}
 	info, err := os.Stat(target)
 	if err != nil {
@@ -105,11 +101,56 @@ func ResourceDataURL(documentPath, reference string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read resource: %w", err)
 	}
-	mediaType := mime.TypeByExtension(strings.ToLower(filepath.Ext(target)))
-	if !strings.HasPrefix(mediaType, "image/") {
-		return "", errors.New("only image resources are supported")
+	mediaType, err := imageMediaType(target, data)
+	if err != nil {
+		return "", err
 	}
 	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func resourcePath(parsed *url.URL) (string, bool, error) {
+	if len(parsed.Scheme) == 1 && ((parsed.Scheme[0] >= 'a' && parsed.Scheme[0] <= 'z') || (parsed.Scheme[0] >= 'A' && parsed.Scheme[0] <= 'Z')) {
+		suffix := parsed.Path
+		if parsed.Opaque != "" {
+			var err error
+			suffix, err = url.PathUnescape(parsed.Opaque)
+			if err != nil {
+				return "", false, fmt.Errorf("decode resource path: %w", err)
+			}
+		}
+		if strings.HasPrefix(suffix, "/") || strings.HasPrefix(suffix, `\`) {
+			return parsed.Scheme + ":" + suffix, true, nil
+		}
+	}
+	if parsed.IsAbs() || parsed.Host != "" || parsed.Path == "" {
+		return "", false, errors.New("only local filesystem resources are supported")
+	}
+	return parsed.Path, false, nil
+}
+
+func imageMediaType(path string, data []byte) (string, error) {
+	mediaType, _, err := mime.ParseMediaType(mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
+	if err != nil || !strings.HasPrefix(mediaType, "image/") {
+		return "", errors.New("only image resources are supported")
+	}
+	detectedType, _, _ := mime.ParseMediaType(http.DetectContentType(data))
+	if strings.HasPrefix(detectedType, "image/") || (mediaType == "image/svg+xml" && isSVG(data)) {
+		return mediaType, nil
+	}
+	return "", errors.New("resource content is not an image")
+}
+
+func isSVG(data []byte) bool {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		if start, ok := token.(xml.StartElement); ok {
+			return start.Name.Local == "svg"
+		}
+	}
 }
 
 func ModifiedAfter(state FileState, known int64) bool {

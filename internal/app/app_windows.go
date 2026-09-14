@@ -29,6 +29,7 @@ const (
 	messageYesNoCancel = 0x00000003
 	messageYesNo       = 0x00000004
 	messageIconWarning = 0x00000030
+	applicationIconID  = 1
 	idYes              = 6
 	idNo               = 7
 )
@@ -88,7 +89,7 @@ func (a *Application) Run() error {
 		AutoFocus:     true,
 		DataPath:      dataPath,
 		Debug:         os.Getenv("SYMMD_DEBUG") == "1",
-		WindowOptions: webview.WindowOptions{Title: "Symmd", Width: uint(width), Height: uint(height), Center: true},
+		WindowOptions: webview.WindowOptions{Title: "Symmd", Width: uint(width), Height: uint(height), Center: true, IconId: applicationIconID},
 	})
 	if w == nil {
 		return errors.New("create WebView2 window: Microsoft Edge WebView2 Runtime is required")
@@ -103,6 +104,10 @@ func (a *Application) Run() error {
 		w.Destroy()
 		return err
 	}
+	if err := window.DisableBrowserZoom(w); err != nil {
+		w.Destroy()
+		return err
+	}
 	a.installRuntimeInstrumentation()
 	if err := window.ConfigureFrontendOrigin(w, webassets.Host, a.frontend.Directory, func() {
 		a.logf("navigation completed")
@@ -114,6 +119,10 @@ func (a *Application) Run() error {
 	if err := window.ApplyChrome(w, 720, 500, a.RequestClose); err != nil {
 		w.Destroy()
 		return fmt.Errorf("apply window chrome: %w", err)
+	}
+	if err := window.ApplyIcon(w, applicationIconID); err != nil {
+		w.Destroy()
+		return fmt.Errorf("apply window icon: %w", err)
 	}
 	a.logf("navigation starting: url=%s", a.frontend.URL)
 	w.Navigate(a.frontend.URL)

@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import { native, type DroppedItem, type MarkdownFile, type Preferences } from '../bridge/native'
 import { MarkdownEditor } from '../editor/MarkdownEditor'
 import { MarkdownPreview } from '../preview/MarkdownPreview'
+import { defaultPreviewZoom, nextPreviewZoom } from '../preview/zoom'
 
 type ViewMode = 'editor' | 'split' | 'preview'
 
@@ -44,7 +45,7 @@ export function App() {
   const [activeID, setActiveID] = useState(firstDocument.id)
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [splitPercent, setSplitPercent] = useState(50)
-  const [preferences, setPreferences] = useState<Preferences>({ theme: 'dark', fontSize: 14, wordWrap: true, viewMode: 'split', previewSync: true, split: 50 })
+  const [preferences, setPreferences] = useState<Preferences>({ theme: 'dark', fontSize: 14, wordWrap: true, viewMode: 'split', previewSync: true, previewZoom: defaultPreviewZoom, split: 50 })
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [editorLine, setEditorLine] = useState(1)
@@ -77,6 +78,20 @@ export function App() {
     if (!settingsLoaded) return
     void native.savePreferences({ ...preferences, viewMode, split: persistedSplit })
   }, [preferences, settingsLoaded, persistedSplit, viewMode])
+
+  useEffect(() => {
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return
+      event.preventDefault()
+      if (!(event.target instanceof Element) || !event.target.closest('.markdown-preview')) return
+      setPreferences((current) => {
+        const previewZoom = nextPreviewZoom(current.previewZoom, event.deltaY)
+        return previewZoom === current.previewZoom ? current : { ...current, previewZoom }
+      })
+    }
+    window.addEventListener('wheel', handleWheel, { passive: false })
+    return () => window.removeEventListener('wheel', handleWheel)
+  }, [])
 
   useEffect(() => {
     if (!settingsOpen) return
@@ -343,7 +358,7 @@ export function App() {
       <main className={`workspace workspace--${viewMode}`}>
         {viewMode !== 'preview' && <section className="editor-pane" style={viewMode === 'split' ? { width: `${splitPercent}%` } : undefined}><MarkdownEditor value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} /></section>}
         {viewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
-        {viewMode !== 'editor' && <section className="preview-pane"><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={addFile} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} /></section>}
+        {viewMode !== 'editor' && <section className="preview-pane"><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={addFile} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
       </main>
       <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>Markdown · UTF-8</span></footer>
     </div>

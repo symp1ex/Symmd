@@ -47,6 +47,21 @@ func ConfigureFrontendOrigin(w webview.WebView, host, directory string, onNaviga
 	return nil
 }
 
+func DisableBrowserZoom(w webview.WebView) error {
+	chromium, err := chromiumFromWebView(w)
+	if err != nil {
+		return err
+	}
+	settings, err := chromium.GetSettings()
+	if err != nil {
+		return fmt.Errorf("get WebView2 settings: %w", err)
+	}
+	if err := settings.PutIsZoomControlEnabled(false); err != nil {
+		return fmt.Errorf("disable WebView2 zoom control: %w", err)
+	}
+	return nil
+}
+
 func chromiumFromWebView(w webview.WebView) (*edge.Chromium, error) {
 	value := reflect.ValueOf(w)
 	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() {

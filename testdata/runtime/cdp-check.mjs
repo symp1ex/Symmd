@@ -51,7 +51,7 @@ await send('Page.enable')
 await send('Network.enable')
 
 async function snapshot() {
-  return evaluate(`(() => ({
+  return evaluate(`(async () => ({
     url: location.href,
     title: document.title,
     readyState: document.readyState,
@@ -69,6 +69,15 @@ async function snapshot() {
       naturalWidth: node.naturalWidth,
       src: node.src,
     })),
+    preferences: await window.GetPreferences(),
+    previewZoom: document.querySelector('.markdown-preview__content')?.style.zoom,
+    previewScrollTop: document.querySelector('.markdown-preview')?.scrollTop,
+    previewScrollHeight: document.querySelector('.markdown-preview')?.scrollHeight,
+    previewClientHeight: document.querySelector('.markdown-preview')?.clientHeight,
+    titlebarHeight: document.querySelector('.titlebar')?.getBoundingClientRect().height,
+    editorFontSize: document.querySelector('.monaco-editor .view-lines') ? getComputedStyle(document.querySelector('.monaco-editor .view-lines')).fontSize : null,
+    devicePixelRatio: window.devicePixelRatio,
+    innerWidth: window.innerWidth,
     earlyDropProbe: window.__earlyDropProbe,
     status: document.querySelector('.statusbar')?.textContent,
     stylesheets: document.styleSheets.length,
@@ -178,6 +187,23 @@ if (action === 'snapshot') {
   console.log(JSON.stringify({ action, requested: true }, null, 2))
   socket.close()
   process.exit(0)
+} else if (action === 'view') {
+  const mode = process.argv[3]
+  if (!['Editor', 'Split', 'Preview'].includes(mode)) throw new Error('view requires Editor, Split, or Preview')
+  await evaluate(`[...document.querySelectorAll('.view-switcher button')].find((button) => button.textContent === ${JSON.stringify(mode)})?.click()`)
+  await wait(300)
+} else if (action === 'wheel') {
+  const selector = process.argv[3]
+  const deltaY = Number(process.argv[4])
+  const control = process.argv[5] === 'ctrl'
+  if (!selector || !Number.isFinite(deltaY)) throw new Error('wheel requires a selector and numeric deltaY')
+  const point = await evaluate(`(() => {
+    const bounds = document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect()
+    return bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 } : null
+  })()`)
+  if (!point) throw new Error(`wheel target ${selector} was not found`)
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY, modifiers: control ? 2 : 0 })
+  await wait(500)
 } else if (action === 'screenshot') {
   const capture = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
   const output = process.argv[3] || 'testdata/runtime/symmd-runtime.png'
