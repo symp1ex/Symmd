@@ -201,8 +201,8 @@ const runtimeInstrumentation = `(function () {
       return;
     }
     dropped.forEach(function (file) {
-      if (!/\.(md|markdown)$/i.test(file.name)) {
-        publishDrop({ kind: "error", message: "Unsupported file: " + file.name + ". Only Markdown files can be opened." });
+      if (!/\.(md|markdown|log)$/i.test(file.name)) {
+        publishDrop({ kind: "error", message: "Unsupported file: " + file.name + ". Only Markdown and log files can be opened." });
         report("drop-rejected", file.name);
         return;
       }
@@ -283,6 +283,9 @@ func (a *Application) openFile() (*files.MarkdownFile, error) {
 	a.logf("SelectMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
 	if err != nil || cancelled {
 		return nil, err
+	}
+	if !files.IsSupportedDocument(path) {
+		return nil, fmt.Errorf("unsupported document: %q", path)
 	}
 	file, err := files.Read(path)
 	if err != nil {
@@ -403,7 +406,7 @@ func (a *Application) openLink(documentPath, reference string) (*files.MarkdownF
 		return nil, fmt.Errorf("decode link path: %w", err)
 	}
 	target := filepath.Join(filepath.Dir(documentPath), filepath.FromSlash(decoded))
-	if ext := strings.ToLower(filepath.Ext(target)); ext != ".md" && ext != ".markdown" {
+	if !files.IsSupportedDocument(target) {
 		info, err := os.Stat(target)
 		if err != nil {
 			return nil, fmt.Errorf("open relative link: %w", err)
@@ -463,8 +466,8 @@ func LoadInitial(arguments []string) (*files.MarkdownFile, error) {
 	if strings.HasPrefix(path, "-") {
 		return nil, fmt.Errorf("unknown option %q", path)
 	}
-	if ext := strings.ToLower(filepath.Ext(path)); ext != ".md" && ext != ".markdown" {
-		return nil, fmt.Errorf("not a Markdown file: %q", path)
+	if !files.IsSupportedDocument(path) {
+		return nil, fmt.Errorf("unsupported document: %q", path)
 	}
 	file, err := files.Read(path)
 	if err != nil {

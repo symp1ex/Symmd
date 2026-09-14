@@ -25,6 +25,30 @@ func TestReadStripsUTF8BOMAndWriteRoundTrips(t *testing.T) {
 	}
 }
 
+func TestIsSupportedDocument(t *testing.T) {
+	for _, path := range []string{"README.md", "README.markdown", "runtime.log", "RUNTIME.LOG"} {
+		if !IsSupportedDocument(path) {
+			t.Errorf("IsSupportedDocument(%q) = false", path)
+		}
+	}
+	for _, path := range []string{"notes.txt", "archive.log.gz", "log"} {
+		if IsSupportedDocument(path) {
+			t.Errorf("IsSupportedDocument(%q) = true", path)
+		}
+	}
+}
+
+func TestWritePreservesLogExtension(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.log")
+	file, err := Write(path, "[INFO] ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.Path != path || filepath.Ext(file.Path) != ".log" || file.Content != "[INFO] ready" {
+		t.Fatalf("Write() = %#v", file)
+	}
+}
+
 func TestMarkdownFileBridgeJSONShape(t *testing.T) {
 	data, err := json.Marshal(MarkdownFile{Path: `C:\notes\README.md`, Name: "README.md", Content: "# hi", ModifiedNS: 42})
 	if err != nil {

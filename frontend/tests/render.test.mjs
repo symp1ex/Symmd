@@ -6,6 +6,11 @@ import { createServer } from 'vite'
 let server
 let renderMarkdown
 let nextPreviewZoom
+let classifyLogFragment
+let effectiveViewMode
+let languageForDocument
+let isSupportedDocumentName
+let resolveRegisteredLanguageID
 
 before(async () => {
   server = await createServer({
@@ -17,6 +22,8 @@ before(async () => {
   })
   ;({ renderMarkdown } = await server.ssrLoadModule('/src/markdown/render.ts'))
   ;({ nextPreviewZoom } = await server.ssrLoadModule('/src/preview/zoom.ts'))
+  ;({ classifyLogFragment } = await server.ssrLoadModule('/src/editor/logLanguage.ts'))
+  ;({ effectiveViewMode, isSupportedDocumentName, languageForDocument, resolveRegisteredLanguageID } = await server.ssrLoadModule('/src/editor/languages.ts'))
 })
 
 after(async () => {
@@ -24,12 +31,15 @@ after(async () => {
 })
 
 test('renders known and unknown fenced languages with copy controls and source lines', () => {
-  const html = renderMarkdown('# Code\n\n```json\n{"enabled": false}\n```\n\n```bash\necho test\n```\n\n```some-unknown-language\nhello\n```')
+  const html = renderMarkdown('# Code\n\n```json\n{"enabled": false}\n```\n\n```bash\necho test\n```\n\n```cmd\necho test\n```\n\n```powershell\nWrite-Output test\n```\n\n```ini\nenabled=true\n```\n\n```some-unknown-language\nhello\n```')
   assert.match(html, /class="code-block" data-source-line="3"/)
   assert.match(html, /data-language="json">\{&quot;enabled&quot;: false\}<\/code>/)
   assert.match(html, /data-language="bash">echo test<\/code>/)
+  assert.match(html, /data-language="cmd">echo test<\/code>/)
+  assert.match(html, /data-language="powershell">Write-Output test<\/code>/)
+  assert.match(html, /data-language="ini">enabled=true<\/code>/)
   assert.match(html, /data-language="some-unknown-language">hello<\/code>/)
-  assert.equal((html.match(/data-copy-code/g) ?? []).length, 3)
+  assert.equal((html.match(/data-copy-code/g) ?? []).length, 6)
 })
 
 test('allows safe details HTML and parses a fenced block inside it', () => {
@@ -101,6 +111,42 @@ test('calculates preview zoom in fixed bounded steps', () => {
   assert.equal(nextPreviewZoom(200, -1), 200)
   assert.equal(nextPreviewZoom(50, 1), 50)
   assert.equal(nextPreviewZoom(100, 0), 100)
+})
+
+test('selects the document language and disables preview modes for log files', () => {
+  assert.equal(isSupportedDocumentName('runtime.LOG'), true)
+  assert.equal(isSupportedDocumentName('runtime.txt'), false)
+  assert.equal(languageForDocument({ path: 'C:\\logs\\runtime.LOG', name: 'runtime.LOG' }), 'log')
+  assert.equal(languageForDocument({ path: '', name: 'README.markdown' }), 'markdown')
+  assert.equal(effectiveViewMode({ path: '', name: 'runtime.log' }, 'split'), 'editor')
+  assert.equal(effectiveViewMode({ path: '', name: 'README.md' }, 'preview'), 'preview')
+})
+
+test('resolves representative Monaco language ids and aliases', () => {
+  const registered = [
+    { id: 'shell', aliases: ['Shell', 'sh'] },
+    { id: 'bat', aliases: ['Batch', 'bat'] },
+    { id: 'powershell', aliases: ['PowerShell', 'ps1'] },
+    { id: 'ini', aliases: ['Ini'] },
+    { id: 'json', aliases: ['JSON'] },
+  ]
+  for (const [alias, expected] of [['bash', 'shell'], ['sh', 'shell'], ['cmd', 'bat'], ['bat', 'bat'], ['batch', 'bat'], ['powershell', 'powershell'], ['ps1', 'powershell'], ['ini', 'ini'], ['json', 'json']]) {
+    assert.equal(resolveRegisteredLanguageID(alias, registered), expected)
+  }
+  assert.equal(resolveRegisteredLanguageID('unknown-language', registered), undefined)
+})
+
+test('classifies VS Code-style log tokens', () => {
+  assert.equal(classifyLogFragment('[INFO]'), 'markup.inserted.log.info')
+  assert.equal(classifyLogFragment('[WARN]'), 'markup.deleted.log.warning')
+  assert.equal(classifyLogFragment('[ERROR]'), 'string.regexp.log.error')
+  assert.equal(classifyLogFragment('[DEBUG]'), 'markup.changed.log.debug')
+  assert.equal(classifyLogFragment('2026-09-12'), 'comment.log.date')
+  assert.equal(classifyLogFragment('01:34:00,351'), 'comment.log.date')
+  assert.equal(classifyLogFragment('10.127.33.42'), 'constant.language.log.constant')
+  assert.equal(classifyLogFragment('64ee11e7-de20-4657-8679-d65f6a0f61c2'), 'constant.language.log.constant')
+  assert.equal(classifyLogFragment('42'), 'constant.language.log.constant')
+  assert.equal(classifyLogFragment('"connected"'), 'string.log.string')
 })
 
 test('keeps Markdown special characters escaped inside fences', () => {

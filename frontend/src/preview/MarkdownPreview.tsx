@@ -54,7 +54,7 @@ export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine
     let cancelled = false
     const host = hostRef.current
     if (!host) return
-    monaco.editor.setTheme(theme === 'dark' ? 'vs-dark' : 'vs')
+    monaco.editor.setTheme(monaco.editorTheme(theme))
     for (const code of host.querySelectorAll<HTMLElement>('.code-block code[data-language]')) {
       const original = codeSourcesRef.current.get(code) ?? code.textContent ?? ''
       codeSourcesRef.current.set(code, original)

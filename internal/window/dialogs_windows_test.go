@@ -43,7 +43,7 @@ func TestMarkdownDialogFilterUsesEmbeddedAndDoubleTrailingNUL(t *testing.T) {
 		t.Fatalf("filter is not double-NUL terminated: %v", filter)
 	}
 	decoded := string(utf16.Decode(filter[:len(filter)-2]))
-	want := "Markdown files (*.md;*.markdown)\x00*.md;*.markdown\x00All files (*.*)\x00*.*"
+	want := "Supported documents (*.md;*.markdown;*.log)\x00*.md;*.markdown;*.log\x00All files (*.*)\x00*.*"
 	if decoded != want {
 		t.Fatalf("filter = %q, want %q", decoded, want)
 	}
@@ -54,6 +54,7 @@ func TestEnsureMarkdownExtension(t *testing.T) {
 		`C:\notes\draft`:          `C:\notes\draft.md`,
 		`C:\notes\draft.md`:       `C:\notes\draft.md`,
 		`C:\notes\draft.markdown`: `C:\notes\draft.markdown`,
+		`C:\notes\draft.log`:      `C:\notes\draft.log`,
 		`C:\notes\draft.txt`:      `C:\notes\draft.txt`,
 	}
 	for input, want := range tests {

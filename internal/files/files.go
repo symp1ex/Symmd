@@ -29,6 +29,15 @@ type FileState struct {
 	ModifiedNS int64 `json:"modifiedNs"`
 }
 
+func IsSupportedDocument(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".markdown", ".log":
+		return true
+	default:
+		return false
+	}
+}
+
 func Read(path string) (MarkdownFile, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

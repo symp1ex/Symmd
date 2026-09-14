@@ -56,7 +56,7 @@ type openFileName struct {
 type DialogLogFunc func(format string, values ...any)
 
 func selectMarkdownFile(owner uintptr, logf DialogLogFunc) (string, bool, error) {
-	return markdownDialog(owner, false, "", "Open Markdown file", logf)
+	return markdownDialog(owner, false, "", "Open document", logf)
 }
 
 func SelectMarkdownFile(owner uintptr, logf DialogLogFunc) (string, bool, error) {
@@ -126,7 +126,7 @@ func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string, l
 }
 
 func markdownDialogFilter() []uint16 {
-	filter := utf16.Encode([]rune("Markdown files (*.md;*.markdown)\x00*.md;*.markdown\x00All files (*.*)\x00*.*\x00"))
+	filter := utf16.Encode([]rune("Supported documents (*.md;*.markdown;*.log)\x00*.md;*.markdown;*.log\x00All files (*.*)\x00*.*\x00"))
 	return append(filter, 0)
 }
 

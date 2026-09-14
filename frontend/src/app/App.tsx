@@ -4,8 +4,7 @@ import { native, type DroppedItem, type MarkdownFile, type Preferences } from '.
 import { MarkdownEditor } from '../editor/MarkdownEditor'
 import { MarkdownPreview } from '../preview/MarkdownPreview'
 import { defaultPreviewZoom, nextPreviewZoom } from '../preview/zoom'
-
-type ViewMode = 'editor' | 'split' | 'preview'
+import { effectiveViewMode, isLogDocument, isSupportedDocumentName, languageForDocument, type ViewMode } from '../editor/languages'
 
 interface DocumentState extends MarkdownFile {
   id: string
@@ -59,6 +58,8 @@ export function App() {
   documentsRef.current = documents
 
   const active = documents.find((document) => document.id === activeID) ?? documents[0]
+  const logDocument = active ? isLogDocument(active) : false
+  const activeViewMode = active ? effectiveViewMode(active, viewMode) : viewMode
   const previewSource = useDebounced(active?.content ?? '', 100)
   const persistedSplit = useDebounced(splitPercent, 300)
   const anyDirty = documents.some(isDirty)
@@ -216,7 +217,7 @@ export function App() {
       const key = event.key.toLowerCase()
       if (keyChordRef.current) {
         keyChordRef.current = false
-        if (key === 'v') { event.preventDefault(); setViewMode('split') }
+        if (key === 'v') { event.preventDefault(); if (!active || !isLogDocument(active)) setViewMode('split') }
         return
       }
       if (event.ctrlKey && key === 'k') { keyChordRef.current = true; return }
@@ -224,7 +225,7 @@ export function App() {
       if (key === 'n') { event.preventDefault(); const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }
       else if (key === 'o') { event.preventDefault(); void openFile() }
       else if (key === 's') { event.preventDefault(); if (active) void saveDocument(active, event.shiftKey) }
-      else if (event.shiftKey && key === 'v') { event.preventDefault(); setViewMode('preview') }
+      else if (event.shiftKey && key === 'v') { event.preventDefault(); if (!active || !isLogDocument(active)) setViewMode('preview') }
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
@@ -264,8 +265,8 @@ export function App() {
         if (event.defaultPrevented) return
         event.preventDefault()
         for (const file of event.dataTransfer.files) {
-          if (!/\.(md|markdown)$/i.test(file.name)) {
-            setMessage(`Unsupported file: ${file.name}. Only Markdown files can be opened.`)
+          if (!isSupportedDocumentName(file.name)) {
+            setMessage(`Unsupported file: ${file.name}. Only Markdown and log files can be opened.`)
             continue
           }
           void file.text()
@@ -350,17 +351,17 @@ export function App() {
         </div>
         <button className="tabs__new" aria-label="New document" onClick={() => { const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }}>+</button>
         <div className="view-switcher">
-          <button className={viewMode === 'editor' ? 'active' : ''} onClick={() => setViewMode('editor')}>Editor</button>
-          <button className={viewMode === 'split' ? 'active' : ''} onClick={() => setViewMode('split')}>Split</button>
-          <button className={viewMode === 'preview' ? 'active' : ''} onClick={() => setViewMode('preview')}>Preview</button>
+          <button className={activeViewMode === 'editor' ? 'active' : ''} onClick={() => setViewMode('editor')}>Editor</button>
+          <button className={activeViewMode === 'split' ? 'active' : ''} disabled={logDocument} title={logDocument ? 'Unavailable for log files' : undefined} onClick={() => setViewMode('split')}>Split</button>
+          <button className={activeViewMode === 'preview' ? 'active' : ''} disabled={logDocument} title={logDocument ? 'Unavailable for log files' : undefined} onClick={() => setViewMode('preview')}>Preview</button>
         </div>
       </div>
-      <main className={`workspace workspace--${viewMode}`}>
-        {viewMode !== 'preview' && <section className="editor-pane" style={viewMode === 'split' ? { width: `${splitPercent}%` } : undefined}><MarkdownEditor value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} /></section>}
-        {viewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
-        {viewMode !== 'editor' && <section className="preview-pane"><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={addFile} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
+      <main className={`workspace workspace--${activeViewMode}`}>
+        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined}><MarkdownEditor value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} /></section>}
+        {activeViewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
+        {activeViewMode !== 'editor' && <section className="preview-pane"><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={addFile} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
       </main>
-      <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>Markdown · UTF-8</span></footer>
+      <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>{logDocument ? 'Log' : 'Markdown'} · UTF-8</span></footer>
     </div>
   )
 }

@@ -3,6 +3,7 @@ import * as monaco from './monaco'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker&inline'
 import 'monaco-editor/min/vs/editor/editor.main.css'
 import { native } from '../bridge/native'
+import type { DocumentLanguage } from './languages'
 
 interface Heading {
   line: number
@@ -73,9 +74,10 @@ interface Props {
   theme: 'dark' | 'light'
   fontSize: number
   wordWrap: boolean
+  language: DocumentLanguage
 }
 
-export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, theme, fontSize, wordWrap }: Props) {
+export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, theme, fontSize, wordWrap, language }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const changingRef = useRef(false)
@@ -88,8 +90,8 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
     if (!hostRef.current) return
     const editor = monaco.editor.create(hostRef.current, {
       value,
-      language: 'markdown',
-      theme: theme === 'dark' ? 'vs-dark' : 'vs',
+      language,
+      theme: monaco.editorTheme(theme),
       automaticLayout: true,
       wordWrap: wordWrap ? 'on' : 'off',
       minimap: { enabled: false },
@@ -127,7 +129,12 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
   }, [value])
 
   useEffect(() => {
-    monaco.editor.setTheme(theme === 'dark' ? 'vs-dark' : 'vs')
+    const model = editorRef.current?.getModel()
+    if (model && model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language)
+  }, [language])
+
+  useEffect(() => {
+    monaco.editor.setTheme(monaco.editorTheme(theme))
     editorRef.current?.updateOptions({ fontSize, wordWrap: wordWrap ? 'on' : 'off' })
   }, [fontSize, theme, wordWrap])
 
