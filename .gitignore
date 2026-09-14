@@ -1,0 +1,13 @@
+/dist/
+/.cache/
+.gocache-vet/
+.gocache/
+AGENTS.md
+rules/
+/frontend/node_modules/
+*.exe
+*.test
+*.log
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="180" viewBox="0 0 640 180" role="img" aria-labelledby="title description">
+  <title id="title">Symmd runtime test</title>
+  <desc id="description">A green card confirming that a local relative image was resolved.</desc>
+  <rect width="640" height="180" rx="24" fill="#173a32"/>
+  <circle cx="82" cy="90" r="42" fill="#55d69e"/>
+  <path d="M61 91l14 14 30-34" fill="none" stroke="#102820" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="145" y="82" fill="#f2fff9" font-family="Segoe UI, sans-serif" font-size="32" font-weight="700">Local image loaded</text>
+  <text x="145" y="122" fill="#a9d9c5" font-family="Segoe UI, sans-serif" font-size="20">Resolved through the restricted Go bridge</text>
+</svg>
