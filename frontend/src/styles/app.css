@@ -9,20 +9,40 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button { color: inherit; font: inherit; }
 
-.window-root { height: 100%; display: grid; grid-template-rows: 35px 35px 1fr 22px; background: #181818; }
-.settings-popover { position: fixed; z-index: 900; top: 34px; left: 265px; width: 240px; display: grid; gap: 12px; padding: 14px; border: 1px solid #454545; border-radius: 4px; background: #252526; box-shadow: 0 8px 24px #0008; font-size: 12px; }
+.window-root { height: 100%; display: grid; grid-template-rows: 36px 35px 1fr 22px; background: #181818; }
+.settings-popover { position: fixed; z-index: 900; top: 36px; right: 109px; width: 240px; display: grid; gap: 12px; padding: 14px; border: 1px solid #454545; border-radius: 4px; background: #252526; box-shadow: 0 8px 24px #0008; font-size: 12px; }
 .settings-popover label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .settings-popover select, .settings-popover input[type="number"] { width: 92px; color: inherit; background: #3c3c3c; border: 1px solid #555; padding: 3px 5px; }
 .titlebar { display: flex; align-items: center; background: #181818; border-bottom: 1px solid #2b2b2b; user-select: none; }
 .titlebar__name { width: 82px; padding-left: 12px; color: #f1f1f1; font-size: 12px; font-weight: 600; }
 .titlebar__menu { display: flex; gap: 1px; height: 100%; }
-.titlebar__menu button, .titlebar__controls button, .view-switcher button {
+.titlebar__menu button, .view-switcher button {
   border: 0; background: transparent; padding: 0 10px; font-size: 12px; cursor: default;
 }
 .titlebar__menu button:hover, .titlebar__controls button:hover, .view-switcher button:hover { background: #2a2d2e; }
-.titlebar__controls { margin-left: auto; display: flex; height: 100%; }
-.titlebar__controls button { width: 46px; padding: 0; font-size: 15px; }
-.titlebar__controls .close-button:hover { background: #c42b1c; color: white; }
+.titlebar__controls { height: 36px; margin-left: auto; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding-right: 4px; }
+.titlebar__button {
+  width: 29px;
+  height: 24px;
+  flex: 0 0 29px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 2px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+.titlebar__button--maximize { font-size: 14px; }
+.titlebar__button--settings { font-size: 15px; }
+.titlebar__button svg { width: 14px; height: 14px; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.titlebar__button:focus-visible { outline: none; box-shadow: inset 0 0 0 1px #007acc; }
+.titlebar .titlebar__controls button.titlebar__button--close:hover { background: #c42b1c; color: white; }
 
 .tabs { display: flex; min-width: 0; background: #181818; border-bottom: 1px solid #2b2b2b; overflow: hidden; }
 .tabs__documents { display: flex; flex: 0 1 auto; min-width: 0; overflow: hidden; }
