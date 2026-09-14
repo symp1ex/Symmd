@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"unicode/utf16"
 	"unsafe"
 )
 
@@ -52,20 +53,25 @@ type openFileName struct {
 	flagsEx          uint32
 }
 
-func selectMarkdownFile(owner uintptr) (string, bool, error) {
-	return markdownDialog(owner, false, "", "Open Markdown file")
+type DialogLogFunc func(format string, values ...any)
+
+func selectMarkdownFile(owner uintptr, logf DialogLogFunc) (string, bool, error) {
+	return markdownDialog(owner, false, "", "Open Markdown file", logf)
 }
 
-func SelectMarkdownFile(owner uintptr) (string, bool, error) { return selectMarkdownFile(owner) }
-func SaveMarkdownFile(owner uintptr, suggestedPath string) (string, bool, error) {
-	return saveMarkdownFile(owner, suggestedPath)
+func SelectMarkdownFile(owner uintptr, logf DialogLogFunc) (string, bool, error) {
+	return selectMarkdownFile(owner, logf)
 }
 
-func saveMarkdownFile(owner uintptr, suggestedPath string) (string, bool, error) {
-	return markdownDialog(owner, true, suggestedPath, "Save Markdown file")
+func SaveMarkdownFile(owner uintptr, suggestedPath string, logf DialogLogFunc) (string, bool, error) {
+	return saveMarkdownFile(owner, suggestedPath, logf)
 }
 
-func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string) (string, bool, error) {
+func saveMarkdownFile(owner uintptr, suggestedPath string, logf DialogLogFunc) (string, bool, error) {
+	return markdownDialog(owner, true, suggestedPath, "Save Markdown file", logf)
+}
+
+func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string, logf DialogLogFunc) (string, bool, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	buffer := make([]uint16, 32768)
@@ -75,30 +81,58 @@ func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string) (
 			copy(buffer, encoded)
 		}
 	}
-	filter := append(syscall.StringToUTF16("Markdown files (*.md;*.markdown)\x00*.md;*.markdown\x00All files (*.*)\x00*.*\x00"), 0)
+	filter := markdownDialogFilter()
 	title, _ := syscall.UTF16PtrFromString(titleText)
 	ext, _ := syscall.UTF16PtrFromString("md")
 	flags := uint32(ofnExplorer | ofnPathMustExist | ofnHideReadOnly | ofnDontAddToRecent)
 	proc := getOpenFileNameW
+	procName := "GetOpenFileNameW"
 	if save {
 		flags |= ofnOverwritePrompt
 		proc = getSaveFileNameW
+		procName = "GetSaveFileNameW"
 	} else {
 		flags |= ofnFileMustExist
 	}
 	dialog := openFileName{owner: owner, filter: &filter[0], filterIndex: 1, file: &buffer[0], maxFile: uint32(len(buffer)), title: title, flags: flags, defaultExtension: ext}
 	dialog.structSize = uint32(unsafe.Sizeof(dialog))
+	if logf != nil {
+		logf("native dialog call: function=%s owner=%d struct_size=%d filter_units=%d buffer_units=%d", procName, owner, dialog.structSize, len(filter), len(buffer))
+	}
 	result, _, _ := proc.Call(uintptr(unsafe.Pointer(&dialog)))
+	runtime.KeepAlive(dialog)
+	runtime.KeepAlive(buffer)
+	runtime.KeepAlive(filter)
+	runtime.KeepAlive(title)
+	runtime.KeepAlive(ext)
+	if logf != nil {
+		logf("native dialog return: function=%s result=%d", procName, result)
+	}
 	if result == 0 {
 		code, _, _ := commDlgExtendedError.Call()
+		if logf != nil {
+			logf("native dialog extended error: function=%s code=0x%x", procName, code)
+		}
 		if code == 0 {
 			return "", true, nil
 		}
 		return "", false, fmt.Errorf("Windows file dialog failed: 0x%x", code)
 	}
 	path := syscall.UTF16ToString(buffer)
-	if save && filepath.Ext(path) == "" {
-		path += ".md"
+	if save {
+		path = ensureMarkdownExtension(path)
 	}
 	return path, false, nil
+}
+
+func markdownDialogFilter() []uint16 {
+	filter := utf16.Encode([]rune("Markdown files (*.md;*.markdown)\x00*.md;*.markdown\x00All files (*.*)\x00*.*\x00"))
+	return append(filter, 0)
+}
+
+func ensureMarkdownExtension(path string) string {
+	if filepath.Ext(path) == "" {
+		return path + ".md"
+	}
+	return path
 }

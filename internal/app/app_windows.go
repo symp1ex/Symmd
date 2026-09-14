@@ -269,7 +269,9 @@ func openRuntimeLog() (*log.Logger, *os.File, string) {
 }
 
 func (a *Application) openFile() (*files.MarkdownFile, error) {
-	path, cancelled, err := window.SelectMarkdownFile(a.hwnd)
+	a.logf("SelectMarkdownFile call: owner=%d", a.hwnd)
+	path, cancelled, err := window.SelectMarkdownFile(a.hwnd, a.logf)
+	a.logf("SelectMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
 	if err != nil || cancelled {
 		return nil, err
 	}
@@ -281,7 +283,9 @@ func (a *Application) openFile() (*files.MarkdownFile, error) {
 }
 
 func (a *Application) saveFileAs(content string) (*files.MarkdownFile, error) {
-	path, cancelled, err := window.SaveMarkdownFile(a.hwnd, "document.md")
+	a.logf("SaveMarkdownFile call: owner=%d", a.hwnd)
+	path, cancelled, err := window.SaveMarkdownFile(a.hwnd, "document.md", a.logf)
+	a.logf("SaveMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
 	if err != nil || cancelled {
 		return nil, err
 	}
