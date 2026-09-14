@@ -1,8 +1,57 @@
 import { useEffect, useRef } from 'react'
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+import * as monaco from './monaco'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker&inline'
 import 'monaco-editor/min/vs/editor/editor.main.css'
 import { native } from '../bridge/native'
+
+interface Heading {
+  line: number
+  level: number
+}
+
+monaco.languages.registerFoldingRangeProvider('markdown', {
+  provideFoldingRanges(model) {
+    const ranges: monaco.languages.FoldingRange[] = []
+    const headings: Heading[] = []
+    let fence: { line: number; marker: string } | undefined
+
+    const closeHeadings = (level: number, end: number) => {
+      while (headings.length && headings[headings.length - 1].level >= level) {
+        const heading = headings.pop()
+        if (heading && end > heading.line) ranges.push({ start: heading.line, end })
+      }
+    }
+
+    for (let line = 1; line <= model.getLineCount(); line += 1) {
+      const content = model.getLineContent(line)
+      if (fence) {
+        const closing = content.match(/^ {0,3}(`{3,}|~{3,})\s*$/)
+        if (closing && closing[1][0] === fence.marker[0] && closing[1].length >= fence.marker.length) {
+          if (line > fence.line) ranges.push({ start: fence.line, end: line })
+          fence = undefined
+        }
+        continue
+      }
+
+      const opening = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/)
+      if (opening && !(opening[1][0] === '`' && opening[2].includes('`'))) {
+        fence = { line, marker: opening[1] }
+        continue
+      }
+
+      const heading = content.match(/^ {0,3}(#{1,6})(?:\s+|$)/)
+      if (!heading) continue
+      const level = heading[1].length
+      closeHeadings(level, line - 1)
+      headings.push({ line, level })
+    }
+
+    const lastLine = model.getLineCount()
+    if (fence && lastLine > fence.line) ranges.push({ start: fence.line, end: lastLine })
+    closeHeadings(0, lastLine)
+    return ranges.sort((left, right) => left.start - right.start)
+  },
+})
 
 type MonacoGlobal = typeof globalThis & { MonacoEnvironment?: { getWorker(): Worker } }
 ;(self as MonacoGlobal).MonacoEnvironment = {
@@ -44,6 +93,9 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
       automaticLayout: true,
       wordWrap: wordWrap ? 'on' : 'off',
       minimap: { enabled: false },
+      folding: true,
+      foldingStrategy: 'auto',
+      showFoldingControls: 'mouseover',
       lineNumbers: 'on',
       scrollBeyondLastLine: false,
       fontSize,

@@ -54,28 +54,6 @@ as a `data:` URL. Raw `file://`, arbitrary HTML, scripts, iframes, event handler
 absolute images, remote images, and non-HTTP link schemes are blocked. The embedded
 page also uses a restrictive Content Security Policy.
 
-## sympllate architecture audit
-
-`sympllate` creates each native window with `jchv/go-webview2` on a locked OS
-thread, obtains the HWND from the wrapper, installs custom chrome by replacing the
-Win32 window procedure, registers named functions with `WebView.Bind`, and calls
-`SetHtml` with the frontend. Vite writes into `internal/webassets/dist`; `go:embed`
-stores it in the executable, while the loader replaces the generated stylesheet
-and module script references with inline content.
-
-| Assessment | Result |
-|---|---|
-| Reusable as-is | Vite output layout; `go:embed` asset FS; `Bind` contract pattern; OS-thread WebView lifecycle |
-| Reusable with changes | Single-window host, common dialogs, custom chrome, persisted size, typed frontend bridge |
-| Not needed | Translation services, Ollama/local models, OCR, inpainting, image batches, clipboard workflow, global hotkeys, tray, updater |
-| Potential risks | WebView2 runtime availability; custom frame edge cases across unusual monitor layouts; browser drag-and-drop lacks a reliable source path |
-
-For VS Code parity, Symmd uses Monaco's standard Markdown language/tokenization
-instead of pulling in `vscode-textmate` and Oniguruma. The preview independently
-implements the relevant open-source behavior: frontend markdown-it rendering,
-safe resource rewriting, source-line annotations, block scroll sync, and familiar
-preview typography. This keeps the dependency tree and first release smaller.
-
 ## Development
 
 Requirements: Go 1.24+, a current Node.js/npm, and Microsoft Edge WebView2 Runtime.

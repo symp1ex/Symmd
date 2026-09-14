@@ -9,6 +9,7 @@ rules/
 *.exe
 *.test
 *.log
+*.txt
 *.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts

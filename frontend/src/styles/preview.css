@@ -23,6 +23,17 @@
 .markdown-preview code { padding: .15em .35em; border-radius: 3px; color: #ce9178; background: rgba(110, 118, 129, .25); font-family: Consolas, "Courier New", monospace; font-size: 90%; }
 .markdown-preview pre { overflow: auto; padding: 16px; background: #181818; border: 1px solid #303030; border-radius: 3px; }
 .markdown-preview pre code { padding: 0; color: #d4d4d4; background: transparent; font-size: 100%; }
+.markdown-preview details { margin: 0 0 16px; }
+.markdown-preview summary { cursor: pointer; }
+.markdown-preview .code-block { position: relative; margin: 0 0 16px; }
+.markdown-preview .code-block pre { margin: 0; padding: 16px 48px 16px 16px; }
+.markdown-preview .code-block code { display: inline-block; min-width: 100%; white-space: pre; overflow-wrap: normal; }
+.markdown-preview .code-copy { position: absolute; z-index: 1; top: 7px; right: 7px; width: 28px; height: 28px; display: grid; place-items: center; padding: 5px; color: #b9b9b9; background: #252526; border: 1px solid #454545; border-radius: 4px; cursor: pointer; }
+.markdown-preview .code-copy:hover { color: #fff; background: #333337; }
+.markdown-preview .code-copy svg { width: 16px; height: 16px; fill: currentColor; }
+.markdown-preview .code-copy__success { display: none; }
+.markdown-preview .code-copy--copied .code-copy__copy { display: none; }
+.markdown-preview .code-copy--copied .code-copy__success { display: block; color: #89d185; }
 .markdown-preview table { border-spacing: 0; border-collapse: collapse; display: block; max-width: 100%; overflow: auto; }
 .markdown-preview th, .markdown-preview td { padding: 6px 13px; border: 1px solid #454545; }
 .markdown-preview tr { background: #1e1e1e; } .markdown-preview tr:nth-child(2n) { background: #252526; }
@@ -35,5 +46,7 @@
 .markdown-preview--light code { color: #a31515; background: rgba(175, 184, 193, .2); }
 .markdown-preview--light pre { background: #f6f8fa; border-color: #d0d7de; }
 .markdown-preview--light pre code { color: #24292f; }
+.markdown-preview--light .code-copy { color: #57606a; background: #fff; border-color: #d0d7de; }
+.markdown-preview--light .code-copy:hover { color: #24292f; background: #f3f4f6; }
 .markdown-preview--light th, .markdown-preview--light td { border-color: #d0d7de; }
 .markdown-preview--light tr { background: #fff; } .markdown-preview--light tr:nth-child(2n) { background: #f6f8fa; }
