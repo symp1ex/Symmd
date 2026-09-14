@@ -52,6 +52,8 @@ export function App() {
   const [message, setMessage] = useState('')
   const keyChordRef = useRef(false)
   const promptedChangesRef = useRef(new Set<string>())
+  const settingsButtonRef = useRef<HTMLButtonElement>(null)
+  const settingsPopoverRef = useRef<HTMLElement>(null)
   const documentsRef = useRef(documents)
   documentsRef.current = documents
 
@@ -75,6 +77,17 @@ export function App() {
     if (!settingsLoaded) return
     void native.savePreferences({ ...preferences, viewMode, split: persistedSplit })
   }, [preferences, settingsLoaded, persistedSplit, viewMode])
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    const closeSettings = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return
+      if (settingsPopoverRef.current?.contains(event.target) || settingsButtonRef.current?.contains(event.target)) return
+      setSettingsOpen(false)
+    }
+    document.addEventListener('pointerdown', closeSettings, true)
+    return () => document.removeEventListener('pointerdown', closeSettings, true)
+  }, [settingsOpen])
 
   useEffect(() => {
     let mounted = true
@@ -250,11 +263,10 @@ export function App() {
       <header className="titlebar" onPointerDown={(event) => { if (event.button === 0) void window.WindowDrag() }}>
         <span className="titlebar__name">Symmd</span>
         <nav className="titlebar__menu" onPointerDown={(event) => event.stopPropagation()}>
-          <button onClick={() => { const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }}>New</button>
           <button onClick={() => void openFile()}>Open</button>
           <button onClick={() => void saveDocument(active)}>Save</button>
           <button onClick={() => void saveDocument(active, true)}>Save As</button>
-          <button aria-label="Settings" onClick={() => setSettingsOpen((open) => !open)}>⚙</button>
+          <button ref={settingsButtonRef} aria-label="Settings" onClick={() => setSettingsOpen((open) => !open)}>⚙</button>
         </nav>
         <div className="titlebar__controls" onPointerDown={(event) => event.stopPropagation()}>
           <button aria-label="Minimize" onClick={() => void window.WindowMinimize()}>—</button>
@@ -263,7 +275,7 @@ export function App() {
         </div>
       </header>
       {settingsOpen && (
-        <aside className="settings-popover" onPointerDown={(event) => event.stopPropagation()}>
+        <aside ref={settingsPopoverRef} className="settings-popover" onPointerDown={(event) => event.stopPropagation()}>
           <label>Theme<select value={preferences.theme} onChange={(event) => setPreferences((current) => ({ ...current, theme: event.target.value as Preferences['theme'] }))}><option value="dark">Dark+</option><option value="light">Light+</option></select></label>
           <label>Editor font size<input type="number" min="10" max="32" value={preferences.fontSize} onChange={(event) => setPreferences((current) => ({ ...current, fontSize: Math.min(32, Math.max(10, Number(event.target.value))) }))} /></label>
           <label><input type="checkbox" checked={preferences.wordWrap} onChange={(event) => setPreferences((current) => ({ ...current, wordWrap: event.target.checked }))} /> Word wrap</label>
@@ -271,12 +283,15 @@ export function App() {
         </aside>
       )}
       <div className="tabs" role="tablist">
-        {documents.map((document) => (
-          <button className={`tab ${document.id === active.id ? 'tab--active' : ''}`} key={document.id} role="tab" onClick={() => setActiveID(document.id)}>
-            <span>{document.name}{isDirty(document) ? ' ●' : ''}</span>
-            <span className="tab__close" role="button" aria-label={`Close ${document.name}`} onClick={(event) => { event.stopPropagation(); void closeDocument(document.id) }}>×</span>
-          </button>
-        ))}
+        <div className="tabs__documents">
+          {documents.map((document) => (
+            <button className={`tab ${document.id === active.id ? 'tab--active' : ''}`} key={document.id} role="tab" onClick={() => setActiveID(document.id)}>
+              <span>{document.name}{isDirty(document) ? ' ●' : ''}</span>
+              <span className="tab__close" role="button" aria-label={`Close ${document.name}`} onClick={(event) => { event.stopPropagation(); void closeDocument(document.id) }}>×</span>
+            </button>
+          ))}
+        </div>
+        <button className="tabs__new" aria-label="New document" onClick={() => { const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }}>+</button>
         <div className="view-switcher">
           <button className={viewMode === 'editor' ? 'active' : ''} onClick={() => setViewMode('editor')}>Editor</button>
           <button className={viewMode === 'split' ? 'active' : ''} onClick={() => setViewMode('split')}>Split</button>

@@ -25,12 +25,15 @@ button { color: inherit; font: inherit; }
 .titlebar__controls .close-button:hover { background: #c42b1c; color: white; }
 
 .tabs { display: flex; min-width: 0; background: #181818; border-bottom: 1px solid #2b2b2b; overflow: hidden; }
+.tabs__documents { display: flex; flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .tab { min-width: 110px; max-width: 220px; height: 34px; display: flex; align-items: center; gap: 10px; justify-content: space-between; border: 0; border-right: 1px solid #2b2b2b; background: #1f1f1f; color: #a8a8a8; padding: 0 8px 0 12px; font-size: 12px; }
 .tab > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab--active { background: #1e1e1e; color: #fff; border-top: 1px solid #007acc; }
 .tab__close { width: 18px; height: 18px; border-radius: 3px; display: grid; place-items: center; font-size: 15px; }
 .tab__close:hover { background: #3a3d41; }
-.view-switcher { margin-left: auto; display: flex; border-left: 1px solid #2b2b2b; }
+.tabs__new { flex: 0 0 34px; width: 34px; height: 34px; padding: 0; border: 0; border-right: 1px solid #2b2b2b; color: #a8a8a8; background: transparent; font-size: 19px; line-height: 1; cursor: default; }
+.tabs__new:hover { color: #fff; background: #2a2d2e; }
+.view-switcher { flex: 0 0 auto; margin-left: auto; display: flex; border-left: 1px solid #2b2b2b; }
 .view-switcher button.active { color: white; background: #37373d; }
 
 .workspace { min-height: 0; min-width: 0; display: flex; background: #1e1e1e; }
@@ -58,6 +61,8 @@ button { color: inherit; font: inherit; }
 .theme-light .titlebar__menu button:hover, .theme-light .titlebar__controls button:hover, .theme-light .view-switcher button:hover { background: #e5e5e5; }
 .theme-light .tab { color: #555; background: #ececec; border-color: #d4d4d4; }
 .theme-light .tab--active, .theme-light .workspace { color: #222; background: #fff; }
+.theme-light .tabs__new { color: #555; border-color: #d4d4d4; }
+.theme-light .tabs__new:hover { color: #111; background: #e5e5e5; }
 .theme-light .view-switcher button.active { color: #111; background: #ddd; }
 .theme-light .splitter { background: #d4d4d4; }
 .theme-light .settings-popover { color: #333; background: #f7f7f7; border-color: #ccc; box-shadow: 0 8px 24px #0003; }

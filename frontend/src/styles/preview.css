@@ -9,7 +9,12 @@
   font-size: 14px;
   line-height: 1.6;
   overflow-wrap: break-word;
+  color-scheme: dark;
+  scrollbar-color: #5f5f5f #1e1e1e;
 }
+.markdown-preview::-webkit-scrollbar-track, .markdown-preview pre::-webkit-scrollbar-track, .markdown-preview table::-webkit-scrollbar-track { background: #1e1e1e; }
+.markdown-preview::-webkit-scrollbar-thumb, .markdown-preview pre::-webkit-scrollbar-thumb, .markdown-preview table::-webkit-scrollbar-thumb { background: #5f5f5f; border: 3px solid #1e1e1e; border-radius: 6px; }
+.markdown-preview::-webkit-scrollbar-thumb:hover, .markdown-preview pre::-webkit-scrollbar-thumb:hover, .markdown-preview table::-webkit-scrollbar-thumb:hover { background: #777; }
 .markdown-preview > :first-child { margin-top: 0 !important; }
 .markdown-preview h1, .markdown-preview h2, .markdown-preview h3, .markdown-preview h4, .markdown-preview h5, .markdown-preview h6 { color: #e7e7e7; font-weight: 600; line-height: 1.25; margin: 24px 0 16px; }
 .markdown-preview h1, .markdown-preview h2 { border-bottom: 1px solid #3c3c3c; padding-bottom: .3em; }
@@ -39,7 +44,10 @@
 .markdown-preview tr { background: #1e1e1e; } .markdown-preview tr:nth-child(2n) { background: #252526; }
 .markdown-preview img { max-width: 100%; } .markdown-preview img[data-blocked-src] { display: none; }
 .markdown-preview input[type="checkbox"] { margin-right: .45em; }
-.markdown-preview--light { color: #333; background: #fff; }
+.markdown-preview--light { color: #333; background: #fff; color-scheme: light; scrollbar-color: #b8b8b8 #fff; }
+.markdown-preview--light::-webkit-scrollbar-track, .markdown-preview--light pre::-webkit-scrollbar-track, .markdown-preview--light table::-webkit-scrollbar-track { background: #fff; }
+.markdown-preview--light::-webkit-scrollbar-thumb, .markdown-preview--light pre::-webkit-scrollbar-thumb, .markdown-preview--light table::-webkit-scrollbar-thumb { background: #b8b8b8; border-color: #fff; }
+.markdown-preview--light::-webkit-scrollbar-thumb:hover, .markdown-preview--light pre::-webkit-scrollbar-thumb:hover, .markdown-preview--light table::-webkit-scrollbar-thumb:hover { background: #999; }
 .markdown-preview--light h1, .markdown-preview--light h2, .markdown-preview--light h3, .markdown-preview--light h4, .markdown-preview--light h5, .markdown-preview--light h6 { color: #1f2328; }
 .markdown-preview--light h1, .markdown-preview--light h2 { border-color: #d0d7de; }
 .markdown-preview--light blockquote { color: #57606a; }

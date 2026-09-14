@@ -23,6 +23,11 @@ const markdown = new MarkdownIt({
   breaks: false,
 })
 
+function isClosingFenceLine(line: string | undefined, markup: string): boolean {
+  const match = line?.replace(/\r$/, '').match(/^ {0,3}(`+|~+)[\t ]*$/)
+  return Boolean(match && match[1][0] === markup[0] && match[1].length >= markup.length)
+}
+
 function sanitizeHtml(raw: string, sourceLine?: string): string {
   const tagPattern = /<!--[\s\S]*?-->|<![^>]*>|<\/?[^>]*>/g
   let rendered = ''
@@ -42,7 +47,9 @@ function sanitizeHtml(raw: string, sourceLine?: string): string {
 
     const closing = tag[1] === '/'
     const name = tag[2].toLowerCase()
-    if (name === 'input' && !closing) {
+    if (name === 'br' && closing) {
+      rendered += '<br>'
+    } else if (name === 'input' && !closing) {
       const checked = /\schecked(?:\s|=|\/?>)/i.test(rawTag)
       rendered += `<input type="checkbox" disabled${checked ? ' checked' : ''}>`
     } else if (!allowedHtmlTags.has(name) || (closing && voidHtmlTags.has(name))) {
@@ -67,7 +74,11 @@ markdown.renderer.rules.html_block = (tokens, index) => sanitizeHtml(tokens[inde
 markdown.renderer.rules.html_inline = (tokens, index) => sanitizeHtml(tokens[index].content)
 
 markdown.core.ruler.push('symmd_source_lines', (state) => {
+  const sourceLines = state.src.split('\n')
   for (const token of state.tokens) {
+    if (token.type === 'fence' && token.map) {
+      token.meta = { ...token.meta, symmdClosedFence: isClosingFenceLine(sourceLines[token.map[1] - 1], token.markup) }
+    }
     if (token.map && (token.nesting === 1 || token.type === 'fence' || token.type === 'code_block' || token.type === 'html_block')) {
       token.attrSet('data-source-line', String(token.map[0] + 1))
     }
@@ -89,6 +100,9 @@ markdown.core.ruler.push('symmd_task_lists', (state) => {
 
 markdown.renderer.rules.fence = (tokens, index) => {
   const token = tokens[index]
+  const content = token.meta?.symmdClosedFence && token.content.endsWith('\n')
+    ? token.content.slice(0, -1)
+    : token.content
   const language = token.info.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
   const safeLanguage = /^[a-z0-9_+#.-]+$/.test(language) ? language : ''
   const languageAttributes = safeLanguage
@@ -98,7 +112,7 @@ markdown.renderer.rules.fence = (tokens, index) => {
   const sourceLineAttribute = sourceLine ? ` data-source-line="${markdown.utils.escapeHtml(sourceLine)}"` : ''
   const copyIcon = '<svg class="code-copy__copy" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4V2.75C4 1.78 4.78 1 5.75 1h7.5C14.22 1 15 1.78 15 2.75v7.5c0 .97-.78 1.75-1.75 1.75H12v1.25c0 .97-.78 1.75-1.75 1.75h-7.5C1.78 15 1 14.22 1 13.25v-7.5C1 4.78 1.78 4 2.75 4H4Zm1.5 0h4.75C11.22 4 12 4.78 12 5.75v4.75h1.25a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25h-7.5a.25.25 0 0 0-.25.25V4Zm-2.75 1.5a.25.25 0 0 0-.25.25v7.5c0 .14.11.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25h-7.5Z"/></svg>'
   const successIcon = '<svg class="code-copy__success" viewBox="0 0 16 16" aria-hidden="true"><path d="m6.5 11.2-3.2-3.2 1.05-1.05L6.5 9.08l5.15-5.13L12.7 5l-6.2 6.2Z"/></svg>'
-  return `<div class="code-block"${sourceLineAttribute}><button type="button" class="code-copy" data-copy-code aria-label="Copy code" title="Copy code">${copyIcon}${successIcon}</button><pre><code${languageAttributes}>${markdown.utils.escapeHtml(token.content)}</code></pre></div>\n`
+  return `<div class="code-block"${sourceLineAttribute}><button type="button" class="code-copy" data-copy-code aria-label="Copy code" title="Copy code">${copyIcon}${successIcon}</button><pre><code${languageAttributes}>${markdown.utils.escapeHtml(content)}</code></pre></div>\n`
 }
 
 const defaultImageRule = markdown.renderer.rules.image

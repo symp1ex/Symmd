@@ -24,9 +24,9 @@ after(async () => {
 test('renders known and unknown fenced languages with copy controls and source lines', () => {
   const html = renderMarkdown('# Code\n\n```json\n{"enabled": false}\n```\n\n```bash\necho test\n```\n\n```some-unknown-language\nhello\n```')
   assert.match(html, /class="code-block" data-source-line="3"/)
-  assert.match(html, /data-language="json">\{&quot;enabled&quot;: false\}\n<\/code>/)
-  assert.match(html, /data-language="bash">echo test\n<\/code>/)
-  assert.match(html, /data-language="some-unknown-language">hello\n<\/code>/)
+  assert.match(html, /data-language="json">\{&quot;enabled&quot;: false\}<\/code>/)
+  assert.match(html, /data-language="bash">echo test<\/code>/)
+  assert.match(html, /data-language="some-unknown-language">hello<\/code>/)
   assert.equal((html.match(/data-copy-code/g) ?? []).length, 3)
 })
 
@@ -45,6 +45,24 @@ test('neutralizes executable raw HTML and attributes', () => {
   assert.match(html, /<details open data-source-line="13"><summary>safe<\/summary><\/details>/)
 })
 
+test('normalizes common br forms without allowing other closing void tags', () => {
+  for (const source of ['before<br>after', 'before<br/>after', 'before<br />after', 'before</br>after']) {
+    const html = renderMarkdown(source)
+    assert.match(html, /before<br>after/)
+    assert.doesNotMatch(html, /&lt;\/br&gt;/)
+  }
+  assert.match(renderMarkdown('before</hr>after'), /before&lt;\/hr&gt;after/)
+  assert.match(renderMarkdown('before</col>after'), /before&lt;\/col&gt;after/)
+})
+
+test('removes one structural newline only from closed fenced blocks', () => {
+  assert.match(renderMarkdown('```text\none line\n```'), /data-language="text">one line<\/code>/)
+  assert.match(renderMarkdown('```text\none\ntwo\n```'), /data-language="text">one\ntwo<\/code>/)
+  assert.match(renderMarkdown('```text\none\n\n```'), /data-language="text">one\n<\/code>/)
+  assert.match(renderMarkdown('```text\nunclosed'), /data-language="text">unclosed<\/code>/)
+  assert.match(renderMarkdown('```text\nunclosed\n'), /data-language="text">unclosed\n<\/code>/)
+})
+
 test('preserves inline code, task lists, and local image resolution metadata', () => {
   const html = renderMarkdown('Use `<details>` here.\n\n- [x] done\n\n![local](images/example.png)\n\n![remote](https://example.com/image.png)')
   assert.match(html, /<code>&lt;details&gt;<\/code>/)
@@ -56,7 +74,7 @@ test('preserves inline code, task lists, and local image resolution metadata', (
 
 test('keeps Markdown special characters escaped inside fences', () => {
   const html = renderMarkdown('```html\n<script>alert(`x`)</script> **not bold**\n```')
-  assert.match(html, /data-language="html">&lt;script&gt;alert\(`x`\)&lt;\/script&gt; \*\*not bold\*\*\n<\/code>/)
+  assert.match(html, /data-language="html">&lt;script&gt;alert\(`x`\)&lt;\/script&gt; \*\*not bold\*\*<\/code>/)
   assert.doesNotMatch(html, /<script>/)
 })
 
