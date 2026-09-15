@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	executableName = "updater-smd.exe"
+	executableName = "updater-md.exe"
 	defaultTimeout = 2 * time.Minute
 	exitDelay      = 2 * time.Second
 )

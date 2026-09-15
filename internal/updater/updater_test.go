@@ -55,7 +55,7 @@ func TestPathsUseUpdaterSMDExecutable(t *testing.T) {
 	if err := os.Mkdir(updaterDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	updaterPath := filepath.Join(updaterDir, "updater-smd.exe")
+	updaterPath := filepath.Join(updaterDir, "updater-md.exe")
 	if err := os.WriteFile(updaterPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
