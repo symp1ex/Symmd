@@ -39,6 +39,11 @@
 .markdown-preview .code-copy__success { display: none; }
 .markdown-preview .code-copy--copied .code-copy__copy { display: none; }
 .markdown-preview .code-copy--copied .code-copy__success { display: block; color: #89d185; }
+.markdown-preview .mermaid-diagram { max-width: 100%; margin: 0 0 16px; overflow: auto; }
+.markdown-preview .mermaid-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.markdown-preview .mermaid-diagram--error { padding: 12px 16px; background: #2b1d1d; border: 1px solid #6e3630; border-radius: 3px; }
+.markdown-preview .mermaid-diagram__error { margin: 0 0 8px; color: #f48771; font-weight: 600; }
+.markdown-preview .mermaid-diagram__source { margin: 0; white-space: pre; }
 .markdown-preview table { border-spacing: 0; border-collapse: collapse; display: block; max-width: 100%; overflow: auto; }
 .markdown-preview th, .markdown-preview td { padding: 6px 13px; border: 1px solid #454545; }
 .markdown-preview tr { background: #1e1e1e; } .markdown-preview tr:nth-child(2n) { background: #252526; }
@@ -56,5 +61,7 @@
 .markdown-preview--light pre code { color: #24292f; }
 .markdown-preview--light .code-copy { color: #57606a; background: #fff; border-color: #d0d7de; }
 .markdown-preview--light .code-copy:hover { color: #24292f; background: #f3f4f6; }
+.markdown-preview--light .mermaid-diagram--error { background: #fff1f0; border-color: #cf6257; }
+.markdown-preview--light .mermaid-diagram__error { color: #a1261d; }
 .markdown-preview--light th, .markdown-preview--light td { border-color: #d0d7de; }
 .markdown-preview--light tr { background: #fff; } .markdown-preview--light tr:nth-child(2n) { background: #f6f8fa; }

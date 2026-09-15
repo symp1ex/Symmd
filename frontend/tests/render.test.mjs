@@ -13,6 +13,34 @@ let languageForDocument
 let isSupportedDocumentName
 let resolveRegisteredLanguageID
 let isSaveableLink
+let mermaidConfiguration
+let renderMermaidBlocks
+
+class FakeElement {
+  constructor(source) {
+    this.children = []
+    this.dataset = source === undefined ? {} : { mermaidSource: source }
+    this.innerHTML = ''
+    this.isConnected = true
+    this.textContent = ''
+    const classes = new Set()
+    this.classList = {
+      add: (name) => classes.add(name),
+      contains: (name) => classes.has(name),
+      remove: (name) => classes.delete(name),
+    }
+    this.ownerDocument = { createElement: () => new FakeElement() }
+  }
+
+  replaceChildren(...children) {
+    this.children = children
+    this.innerHTML = ''
+  }
+}
+
+function fakeHost(...containers) {
+  return { querySelectorAll: () => containers }
+}
 
 before(async () => {
   server = await createServer({
@@ -27,6 +55,7 @@ before(async () => {
   ;({ classifyLogFragment, logLanguage } = await server.ssrLoadModule('/src/editor/logLanguage.ts'))
   ;({ effectiveViewMode, isSupportedDocumentName, languageForDocument, resolveRegisteredLanguageID } = await server.ssrLoadModule('/src/editor/languages.ts'))
   ;({ isSaveableLink } = await server.ssrLoadModule('/src/preview/linkContext.ts'))
+  ;({ mermaidConfiguration, renderMermaidBlocks } = await server.ssrLoadModule('/src/preview/mermaid.ts'))
 })
 
 after(async () => {
@@ -43,6 +72,93 @@ test('renders known and unknown fenced languages with copy controls and source l
   assert.match(html, /data-language="ini">enabled=true<\/code>/)
   assert.match(html, /data-language="some-unknown-language">hello<\/code>/)
   assert.equal((html.match(/data-copy-code/g) ?? []).length, 6)
+})
+
+test('renders Mermaid fences as escaped source-line placeholders without code controls', () => {
+  const html = renderMarkdown('Before\n\n```mermaid\nflowchart LR\n  A["<img src=x onerror=alert(1)>"] --> B\n```\n\n```javascript\nconst safe = "<tag>"\n```')
+  assert.match(html, /<div class="mermaid-diagram" data-mermaid-source="flowchart LR\n  A\[&quot;&lt;img src=x onerror=alert\(1\)&gt;&quot;\] --&gt; B" data-source-line="3"><\/div>/)
+  assert.equal((html.match(/class="mermaid-diagram"/g) ?? []).length, 1)
+  assert.equal((html.match(/class="code-block"/g) ?? []).length, 1)
+  assert.equal((html.match(/data-copy-code/g) ?? []).length, 1)
+  assert.match(html, /data-language="javascript">const safe = &quot;&lt;tag&gt;&quot;<\/code>/)
+  assert.doesNotMatch(html, /<img\b/i)
+})
+
+test('renders multiple Mermaid placeholders independently as SVG', async () => {
+  const first = new FakeElement('flowchart LR\nA --> B')
+  const second = new FakeElement('sequenceDiagram\nA->>B: Hi')
+  const seen = []
+  await renderMermaidBlocks(fakeHost(first, second), 'dark', () => false, async (source, theme) => {
+    seen.push([source, theme])
+    return { diagramType: 'test', svg: `<svg data-source="${seen.length}"></svg>` }
+  })
+  assert.deepEqual(seen, [
+    ['flowchart LR\nA --> B', 'dark'],
+    ['sequenceDiagram\nA->>B: Hi', 'dark'],
+  ])
+  assert.equal(first.innerHTML, '<svg data-source="1"></svg>')
+  assert.equal(second.innerHTML, '<svg data-source="2"></svg>')
+})
+
+test('keeps an invalid Mermaid error local and preserves its source as text', async () => {
+  const valid = new FakeElement('flowchart LR\nA --> B')
+  const invalidSource = 'flowchart LR\nA[<script>alert(1)</script>'
+  const invalid = new FakeElement(invalidSource)
+  await renderMermaidBlocks(fakeHost(valid, invalid), 'light', () => false, async (source) => {
+    if (source === invalidSource) throw new Error('Parse error')
+    return { diagramType: 'flowchart', svg: '<svg></svg>' }
+  })
+  assert.equal(valid.innerHTML, '<svg></svg>')
+  assert.equal(invalid.classList.contains('mermaid-diagram--error'), true)
+  assert.match(invalid.children[0].textContent, /Parse error/)
+  assert.equal(invalid.children[1].textContent, invalidSource)
+  assert.equal(invalid.innerHTML, '')
+})
+
+test('does not apply a stale asynchronous Mermaid result after source changes', async () => {
+  const oldSource = 'flowchart LR\nStaleOld --> Target'
+  const newSource = 'flowchart LR\nStaleNew --> Target'
+  const container = new FakeElement(oldSource)
+  const resolvers = new Map()
+  const renderer = (source) => new Promise((resolve) => resolvers.set(source, resolve))
+  let generation = 1
+  const first = renderMermaidBlocks(fakeHost(container), 'dark', () => generation !== 1, renderer)
+  container.dataset.mermaidSource = newSource
+  generation = 2
+  const second = renderMermaidBlocks(fakeHost(container), 'dark', () => generation !== 2, renderer)
+  resolvers.get(newSource)({ diagramType: 'flowchart', svg: '<svg data-current="true"></svg>' })
+  await second
+  resolvers.get(oldSource)({ diagramType: 'flowchart', svg: '<svg data-stale="true"></svg>' })
+  await first
+  assert.equal(container.innerHTML, '<svg data-current="true"></svg>')
+})
+
+test('caches unchanged Mermaid SVG by source and theme and rerenders on theme change', async () => {
+  let calls = 0
+  const renderer = async (_source, theme) => {
+    calls += 1
+    return { diagramType: 'flowchart', svg: `<svg data-theme="${theme}"></svg>` }
+  }
+  const first = new FakeElement('flowchart LR\nThemeA --> ThemeB')
+  await renderMermaidBlocks(fakeHost(first), 'dark', () => false, renderer)
+  const unchanged = new FakeElement('flowchart LR\nThemeA --> ThemeB')
+  await renderMermaidBlocks(fakeHost(unchanged), 'dark', () => false, renderer)
+  const changedTheme = new FakeElement('flowchart LR\nThemeA --> ThemeB')
+  await renderMermaidBlocks(fakeHost(changedTheme), 'light', () => false, renderer)
+  assert.equal(calls, 2)
+  assert.equal(unchanged.innerHTML, '<svg data-theme="dark"></svg>')
+  assert.equal(changedTheme.innerHTML, '<svg data-theme="light"></svg>')
+})
+
+test('uses strict Mermaid security configuration for both preview themes', () => {
+  assert.deepEqual(mermaidConfiguration('dark'), {
+    securityLevel: 'strict',
+    startOnLoad: false,
+    suppressErrorRendering: true,
+    theme: 'dark',
+  })
+  assert.equal(mermaidConfiguration('light').theme, 'default')
+  assert.equal(mermaidConfiguration('light').securityLevel, 'strict')
 })
 
 test('offers Save link as only for link types supported by existing navigation', () => {

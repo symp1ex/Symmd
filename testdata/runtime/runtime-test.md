@@ -25,3 +25,26 @@ func main() {
 ## Local image
 
 ![Local Symmd runtime test card](runtime-image.svg)
+
+## Mermaid
+
+```mermaid
+flowchart LR
+    A[Start] --> B{Check}
+    B -->|Yes| C[Done]
+    B -->|No| D[Retry]
+```
+
+```mermaid
+sequenceDiagram
+    Alice->>Bob: Hello
+```
+
+```mermaid
+flowchart LR
+    A["<script>window.__mermaidInjected = true</script>"] --> B[Safe]
+```
+
+```mermaid
+not a valid diagram
+```

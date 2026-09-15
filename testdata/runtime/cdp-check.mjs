@@ -64,6 +64,15 @@ async function snapshot() {
     previewHeadings: [...document.querySelectorAll('.markdown-preview h1,.markdown-preview h2')].map((node) => node.textContent),
     previewTables: document.querySelectorAll('.markdown-preview table').length,
     previewFencedCode: document.querySelectorAll('.markdown-preview pre code').length,
+    previewMermaid: document.querySelectorAll('.markdown-preview .mermaid-diagram').length,
+    previewMermaidSourceLines: [...document.querySelectorAll('.markdown-preview .mermaid-diagram')].map((node) => node.dataset.sourceLine),
+    previewMermaidSvg: document.querySelectorAll('.markdown-preview .mermaid-diagram > svg').length,
+    previewMermaidErrors: document.querySelectorAll('.markdown-preview .mermaid-diagram--error').length,
+    previewMermaidErrorText: [...document.querySelectorAll('.markdown-preview .mermaid-diagram__error')].map((node) => node.textContent),
+    previewMermaidUnsafe: document.querySelectorAll('.markdown-preview .mermaid-diagram script,.markdown-preview .mermaid-diagram iframe,.markdown-preview .mermaid-diagram [onload],.markdown-preview .mermaid-diagram [onerror],.markdown-preview .mermaid-diagram [onclick]').length,
+    previewMermaidJavascriptLinks: [...document.querySelectorAll('.markdown-preview .mermaid-diagram a')].filter((node) => /^javascript:/i.test(node.getAttribute('href') ?? '')).length,
+    mermaidInjected: window.__mermaidInjected === true,
+    mermaidThemeProbe: window.__symmdMermaidThemeProbe,
     previewImages: [...document.querySelectorAll('.markdown-preview img')].map((node) => ({
       alt: node.alt,
       naturalWidth: node.naturalWidth,
@@ -223,6 +232,23 @@ if (action === 'snapshot') {
     }
   })`)
   await wait(300)
+} else if (action === 'mermaid-theme') {
+  await wait(2500)
+  const previousSvg = await evaluate(`document.querySelector('.mermaid-diagram > svg')?.outerHTML ?? ''`)
+  const nextTheme = await evaluate(`document.querySelector('.markdown-preview--light') ? 'dark' : 'light'`)
+  await evaluate(`if (!document.querySelector('.settings-popover select')) document.querySelector('.titlebar__button--settings')?.click()`)
+  await wait(200)
+  await evaluate(`(() => {
+    const select = document.querySelector('.settings-popover select')
+    if (!select) return
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set.call(select, ${JSON.stringify(nextTheme)})
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })()`)
+  await wait(2500)
+  await evaluate(`window.__symmdMermaidThemeProbe = {
+    changed: ${JSON.stringify(previousSvg)} !== (document.querySelector('.mermaid-diagram > svg')?.outerHTML ?? ''),
+    previewClass: document.querySelector('.markdown-preview')?.className,
+  }`)
 } else if (action === 'click-open') {
   await evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent === 'Open')?.click()`)
 } else if (action === 'click-save') {

@@ -12,6 +12,7 @@ Symmd includes or builds against the following software. Versions are locked in
 | golang.org/x/sys | 2021-02-18 commit | BSD-3-Clause | Windows APIs (transitive) |
 | monaco-editor | 0.52.2 | MIT | Editor and built-in Markdown tokenization |
 | markdown-it | 14.3.2 | MIT | Markdown rendering |
+| Mermaid | 11.17.2 | MIT | Markdown diagram rendering |
 | React / React DOM | 19.3.0 | MIT | Frontend UI |
 | Vite | 7.3.6 | MIT; bundled build-time code also carries permissive notices | Frontend build |
 | TypeScript | 5.9.3 | Apache-2.0 | Frontend type checking |
