@@ -16,13 +16,14 @@ type WindowState struct {
 }
 
 type Preferences struct {
-	Theme       string  `json:"theme"`
-	FontSize    int     `json:"fontSize"`
-	WordWrap    bool    `json:"wordWrap"`
-	ViewMode    string  `json:"viewMode"`
-	PreviewSync bool    `json:"previewSync"`
-	PreviewZoom int     `json:"previewZoom"`
-	Split       float64 `json:"split"`
+	Theme                     string  `json:"theme"`
+	FontSize                  int     `json:"fontSize"`
+	WordWrap                  bool    `json:"wordWrap"`
+	ViewMode                  string  `json:"viewMode"`
+	PreviewSync               bool    `json:"previewSync"`
+	PreviewZoom               int     `json:"previewZoom"`
+	Split                     float64 `json:"split"`
+	AutoReloadExternalChanges bool    `json:"autoReloadExternalChanges"`
 }
 
 type Config struct {
@@ -31,7 +32,7 @@ type Config struct {
 }
 
 func Defaults() Config {
-	return Config{Preferences: Preferences{Theme: "dark", FontSize: 14, WordWrap: true, ViewMode: "split", PreviewSync: true, PreviewZoom: 100, Split: 50}}
+	return Config{Preferences: Preferences{Theme: "dark", FontSize: 14, WordWrap: true, ViewMode: "split", PreviewSync: true, PreviewZoom: 100, Split: 50, AutoReloadExternalChanges: false}}
 }
 
 func NormalizePreferences(preferences Preferences) Preferences {

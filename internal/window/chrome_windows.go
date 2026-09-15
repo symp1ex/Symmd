@@ -9,9 +9,10 @@ import (
 	"errors"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
-	webview "github.com/jchv/go-webview2"
+	webview "github.com/symp1ex/go-webview2"
 )
 
 const (
@@ -45,6 +46,7 @@ const (
 	iconBig         = 1
 	imageIcon       = 1
 	lrShared        = 0x00008000
+	monitorNearest  = 2
 	smCXIcon        = 11
 	smCYIcon        = 12
 	smCXSmallIcon   = 49
@@ -54,6 +56,12 @@ const (
 type point struct{ X, Y int32 }
 type rect struct{ Left, Top, Right, Bottom int32 }
 type minMaxInfo struct{ Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize point }
+type monitorInfo struct {
+	Size    uint32
+	Monitor rect
+	Work    rect
+	Flags   uint32
+}
 type chromeOptions struct {
 	minWidth, minHeight, titleHeight, buttonsWidth int32
 	onClose                                        func()
@@ -67,6 +75,9 @@ var (
 	setWindowPos     = user32.NewProc("SetWindowPos")
 	callWindowProc   = user32.NewProc("CallWindowProcW")
 	getWindowRect    = user32.NewProc("GetWindowRect")
+	monitorForRect   = user32.NewProc("MonitorFromRect")
+	monitorForWindow = user32.NewProc("MonitorFromWindow")
+	getMonitorInfo   = user32.NewProc("GetMonitorInfoW")
 	getCursorPos     = user32.NewProc("GetCursorPos")
 	showWindow       = user32.NewProc("ShowWindow")
 	isZoomed         = user32.NewProc("IsZoomed")
@@ -139,6 +150,18 @@ func ToggleMaximized(w webview.WebView) bool { return toggleWindowMaximized(w) }
 func Drag(w webview.WebView)                 { dragWindow(w) }
 func Resize(w webview.WebView, hit uintptr)  { resizeWindow(w, hit) }
 func EnableDPIAwareness()                    { setDPIAwareness.Call(^uintptr(3)) }
+func IsRectVisible(x, y, width, height int32) bool {
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	right, bottom := int64(x)+int64(width), int64(y)+int64(height)
+	if right > int64(^uint32(0)>>1) || bottom > int64(^uint32(0)>>1) {
+		return false
+	}
+	r := rect{Left: x, Top: y, Right: int32(right), Bottom: int32(bottom)}
+	monitor, _, _ := monitorForRect.Call(uintptr(unsafe.Pointer(&r)), 0)
+	return monitor != 0
+}
 
 func minimizeWindow(w webview.WebView) {
 	if hwnd := uintptr(w.Window()); hwnd != 0 {
@@ -153,6 +176,13 @@ func toggleWindowMaximized(w webview.WebView) bool {
 	maximized, _, _ := isZoomed.Call(hwnd)
 	if maximized != 0 {
 		showWindow.Call(hwnd, 9)
+		time.AfterFunc(100*time.Millisecond, func() {
+			w.Dispatch(func() {
+				if chromium, err := chromiumFromWebView(w); err == nil {
+					chromium.Resize()
+				}
+			})
+		})
 		return false
 	}
 	showWindow.Call(hwnd, 3)
@@ -186,9 +216,12 @@ func windowChromeProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr 
 	old, hasOld := oldProcs.Load(hwnd)
 	switch msg {
 	case wmNCCalcSize:
+		if wParam != 0 {
+			updateMaximizedClientRect(hwnd, lParam)
+		}
 		return 0
 	case wmGetMinMaxInfo:
-		updateMinMax(lParam, options)
+		updateMinMax(hwnd, lParam, options)
 		return 0
 	case wmNCHitTest:
 		return hitTest(hwnd, lParam, options)
@@ -213,15 +246,59 @@ func windowChromeProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr 
 	return htClient
 }
 
-func updateMinMax(lParam uintptr, options chromeOptions) {
+func updateMinMax(hwnd, lParam uintptr, options chromeOptions) {
 	if lParam == 0 {
 		return
 	}
 	var info minMaxInfo
 	size := unsafe.Sizeof(info)
 	copyMemory.Call(uintptr(unsafe.Pointer(&info)), lParam, size)
+	if monitor, ok := windowMonitorInfo(hwnd); ok {
+		applyMonitorWorkArea(&info, monitor)
+	}
 	info.MinTrackSize.X, info.MinTrackSize.Y = options.minWidth, options.minHeight
 	copyMemory.Call(lParam, uintptr(unsafe.Pointer(&info)), size)
+}
+
+func updateMaximizedClientRect(hwnd, lParam uintptr) {
+	if lParam == 0 {
+		return
+	}
+	maximized, _, _ := isZoomed.Call(hwnd)
+	if maximized == 0 {
+		return
+	}
+	monitor, ok := windowMonitorInfo(hwnd)
+	if !ok {
+		return
+	}
+	var proposed rect
+	copyMemory.Call(uintptr(unsafe.Pointer(&proposed)), lParam, unsafe.Sizeof(proposed))
+	if !coversRect(proposed, monitor.Work) {
+		return
+	}
+	copyMemory.Call(lParam, uintptr(unsafe.Pointer(&monitor.Work)), unsafe.Sizeof(monitor.Work))
+}
+
+func windowMonitorInfo(hwnd uintptr) (monitorInfo, bool) {
+	monitorHandle, _, _ := monitorForWindow.Call(hwnd, monitorNearest)
+	if monitorHandle == 0 {
+		return monitorInfo{}, false
+	}
+	monitor := monitorInfo{Size: uint32(unsafe.Sizeof(monitorInfo{}))}
+	ok, _, _ := getMonitorInfo.Call(monitorHandle, uintptr(unsafe.Pointer(&monitor)))
+	return monitor, ok != 0
+}
+
+func applyMonitorWorkArea(info *minMaxInfo, monitor monitorInfo) {
+	info.MaxPosition.X = monitor.Work.Left - monitor.Monitor.Left
+	info.MaxPosition.Y = monitor.Work.Top - monitor.Monitor.Top
+	info.MaxSize.X = monitor.Work.Right - monitor.Work.Left
+	info.MaxSize.Y = monitor.Work.Bottom - monitor.Work.Top
+}
+
+func coversRect(outer, inner rect) bool {
+	return outer.Left <= inner.Left && outer.Top <= inner.Top && outer.Right >= inner.Right && outer.Bottom >= inner.Bottom
 }
 func hitTest(hwnd, lParam uintptr, options chromeOptions) uintptr {
 	var r rect

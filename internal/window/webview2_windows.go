@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"unsafe"
 
-	webview "github.com/jchv/go-webview2"
 	"github.com/jchv/go-webview2/pkg/edge"
+	webview "github.com/symp1ex/go-webview2"
 )
 
 // ConfigureFrontendOrigin maps a trusted directory to an HTTPS origin and

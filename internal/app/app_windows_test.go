@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/symp1ex/symmd/internal/settings"
+	"github.com/symp1ex/symmd/internal/window"
 )
 
 func TestLoadInitialSupportedDocuments(t *testing.T) {
@@ -23,6 +26,31 @@ func TestLoadInitialSupportedDocuments(t *testing.T) {
 				t.Fatalf("LoadInitial() = %#v, %v", file, err)
 			}
 		})
+	}
+}
+
+func TestInitialWindowOptionsCentersWithoutSavedState(t *testing.T) {
+	options := initialWindowOptions(settings.WindowState{})
+	if !options.Center || options.X != nil || options.Y != nil || options.Width != defaultWidth || options.Height != defaultHeight {
+		t.Fatalf("unexpected default window options: %#v", options)
+	}
+}
+
+func TestInitialWindowOptionsUsesVisibleSavedPosition(t *testing.T) {
+	state := settings.WindowState{X: 0, Y: 0, Width: 900, Height: 700}
+	if !window.IsRectVisible(state.X, state.Y, state.Width, state.Height) {
+		t.Skip("Windows desktop monitor is unavailable")
+	}
+	options := initialWindowOptions(state)
+	if options.Center || options.X == nil || options.Y == nil || *options.X != 0 || *options.Y != 0 || options.Width != 900 || options.Height != 700 {
+		t.Fatalf("unexpected restored window options: %#v", options)
+	}
+}
+
+func TestInitialWindowOptionsCentersOffscreenSavedPosition(t *testing.T) {
+	options := initialWindowOptions(settings.WindowState{X: 1_000_000_000, Y: 1_000_000_000, Width: 900, Height: 700})
+	if !options.Center || options.X != nil || options.Y != nil || options.Width != 900 || options.Height != 700 {
+		t.Fatalf("unexpected offscreen window options: %#v", options)
 	}
 }
 

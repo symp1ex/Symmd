@@ -9,6 +9,8 @@ import (
 	"github.com/symp1ex/symmd/internal/webassets"
 )
 
+const version = "v0.2.1.5"
+
 func main() {
 	initial, err := app.LoadInitial(os.Args[1:])
 	if err != nil {
@@ -20,7 +22,7 @@ func main() {
 		app.ShowError(err)
 		os.Exit(1)
 	}
-	if err := app.New(frontend, initial).Run(); err != nil {
+	if err := app.New(frontend, initial, version).Run(); err != nil {
 		app.ShowError(err)
 		os.Exit(1)
 	}

@@ -22,6 +22,7 @@ export interface Preferences {
   previewSync: boolean
   previewZoom: number
   split: number
+  autoReloadExternalChanges: boolean
 }
 
 export type DroppedItem =
@@ -33,6 +34,7 @@ declare global {
     __symmdDropQueue?: DroppedItem[]
     __symmdDropHandlerReady?: boolean
     ReportRuntimeEvent(kind: string, detail: string): Promise<void>
+    GetVersion(): Promise<string>
     GetInitialFile(): Promise<MarkdownFile | null>
     OpenFile(): Promise<MarkdownFile | null>
     ReadFile(path: string): Promise<MarkdownFile>
@@ -59,6 +61,7 @@ declare global {
 
 export const native = {
   reportRuntimeEvent: (kind: string, detail: string) => window.ReportRuntimeEvent(kind, detail),
+  version: () => window.GetVersion(),
   initialFile: () => window.GetInitialFile(),
   openFile: () => window.OpenFile(),
   readFile: (path: string) => window.ReadFile(path),

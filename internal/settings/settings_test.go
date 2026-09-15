@@ -14,8 +14,35 @@ func TestWindowStateJSONFieldsRemainStable(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	config := Defaults()
-	if config.Preferences.ViewMode != "split" || !config.Preferences.PreviewSync || config.Preferences.FontSize != 14 || config.Preferences.PreviewZoom != 100 {
+	if config.Preferences.ViewMode != "split" || !config.Preferences.PreviewSync || config.Preferences.FontSize != 14 || config.Preferences.PreviewZoom != 100 || config.Preferences.AutoReloadExternalChanges {
 		t.Fatalf("unexpected defaults: %#v", config.Preferences)
+	}
+}
+
+func TestMissingAutoReloadExternalChangesUsesDefault(t *testing.T) {
+	config := Defaults()
+	if err := json.Unmarshal([]byte(`{"preferences":{"theme":"light","fontSize":16,"wordWrap":true,"viewMode":"preview","previewSync":true,"previewZoom":110,"split":60}}`), &config); err != nil {
+		t.Fatal(err)
+	}
+	config.Preferences = NormalizePreferences(config.Preferences)
+	if config.Preferences.AutoReloadExternalChanges {
+		t.Fatalf("unexpected migrated preferences: %#v", config.Preferences)
+	}
+}
+
+func TestAutoReloadExternalChangesJSONRoundTrip(t *testing.T) {
+	preferences := Defaults().Preferences
+	preferences.AutoReloadExternalChanges = true
+	data, err := json.Marshal(preferences)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Preferences
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.AutoReloadExternalChanges {
+		t.Fatalf("unexpected decoded preferences: %#v", decoded)
 	}
 }
 

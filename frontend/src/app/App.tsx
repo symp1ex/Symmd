@@ -44,7 +44,8 @@ export function App() {
   const [activeID, setActiveID] = useState(firstDocument.id)
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [splitPercent, setSplitPercent] = useState(50)
-  const [preferences, setPreferences] = useState<Preferences>({ theme: 'dark', fontSize: 14, wordWrap: true, viewMode: 'split', previewSync: true, previewZoom: defaultPreviewZoom, split: 50 })
+  const [preferences, setPreferences] = useState<Preferences>({ theme: 'dark', fontSize: 14, wordWrap: true, viewMode: 'split', previewSync: true, previewZoom: defaultPreviewZoom, split: 50, autoReloadExternalChanges: false })
+  const [version, setVersion] = useState('')
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [editorLine, setEditorLine] = useState(1)
@@ -55,7 +56,9 @@ export function App() {
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const settingsPopoverRef = useRef<HTMLElement>(null)
   const documentsRef = useRef(documents)
+  const autoReloadExternalChangesRef = useRef(preferences.autoReloadExternalChanges)
   documentsRef.current = documents
+  autoReloadExternalChangesRef.current = preferences.autoReloadExternalChanges
 
   const active = documents.find((document) => document.id === activeID) ?? documents[0]
   const logDocument = active ? isLogDocument(active) : false
@@ -67,6 +70,7 @@ export function App() {
   useEffect(() => { void native.setDirty(anyDirty) }, [anyDirty])
 
   useEffect(() => {
+    void native.version().then(setVersion).catch(() => undefined)
     void native.getPreferences().then((loaded) => {
       setPreferences(loaded)
       setViewMode(loaded.viewMode)
@@ -198,14 +202,31 @@ export function App() {
         void native.checkFile(document.path).then(async (state) => {
           if (!state.exists || !document.modifiedNs || state.modifiedNs === document.modifiedNs) return
           promptedChangesRef.current.add(document.path)
-          const reload = await native.confirmReload(document.name)
-          if (reload) {
-            const file = await native.readFile(document.path)
-            setDocuments((current) => current.map((item) => item.id === document.id ? { ...item, ...file, savedContent: file.content } : item))
-          } else {
-            setDocuments((current) => current.map((item) => item.id === document.id ? { ...item, modifiedNs: state.modifiedNs } : item))
+          try {
+            const currentDocument = documentsRef.current.find((item) => item.id === document.id && item.path === document.path)
+            if (!currentDocument) return
+            if (autoReloadExternalChangesRef.current) {
+              if (isDirty(currentDocument)) {
+                setDocuments((current) => current.map((item) => item.id === document.id && item.path === document.path ? { ...item, modifiedNs: state.modifiedNs } : item))
+              } else {
+                const file = await native.readFile(document.path)
+                setDocuments((current) => current.map((item) => {
+                  if (item.id !== document.id || item.path !== document.path) return item
+                  return isDirty(item) ? { ...item, modifiedNs: file.modifiedNs } : { ...item, ...file, savedContent: file.content }
+                }))
+              }
+            } else {
+              const reload = await native.confirmReload(document.name)
+              if (reload) {
+                const file = await native.readFile(document.path)
+                setDocuments((current) => current.map((item) => item.id === document.id ? { ...item, ...file, savedContent: file.content } : item))
+              } else {
+                setDocuments((current) => current.map((item) => item.id === document.id ? { ...item, modifiedNs: state.modifiedNs } : item))
+              }
+            }
+          } finally {
+            window.setTimeout(() => promptedChangesRef.current.delete(document.path), 1500)
           }
-          window.setTimeout(() => promptedChangesRef.current.delete(document.path), 1500)
         }).catch(() => undefined)
       }
     }, 1800)
@@ -338,6 +359,8 @@ export function App() {
           <label>Editor font size<input type="number" min="10" max="32" value={preferences.fontSize} onChange={(event) => setPreferences((current) => ({ ...current, fontSize: Math.min(32, Math.max(10, Number(event.target.value))) }))} /></label>
           <label><input type="checkbox" checked={preferences.wordWrap} onChange={(event) => setPreferences((current) => ({ ...current, wordWrap: event.target.checked }))} /> Word wrap</label>
           <label><input type="checkbox" checked={preferences.previewSync} onChange={(event) => setPreferences((current) => ({ ...current, previewSync: event.target.checked }))} /> Preview scroll sync</label>
+          <label><input type="checkbox" checked={preferences.autoReloadExternalChanges} onChange={(event) => setPreferences((current) => ({ ...current, autoReloadExternalChanges: event.target.checked }))} /> Automatically reload external changes</label>
+          <footer className="settings-statusbar">{version}</footer>
         </aside>
       )}
       <div className="tabs" role="tablist">

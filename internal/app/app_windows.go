@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	webview "github.com/jchv/go-webview2"
+	webview "github.com/symp1ex/go-webview2"
 	"github.com/symp1ex/symmd/internal/files"
 	"github.com/symp1ex/symmd/internal/settings"
 	"github.com/symp1ex/symmd/internal/webassets"
@@ -53,6 +53,7 @@ type nativeRect struct{ Left, Top, Right, Bottom int32 }
 type Application struct {
 	frontend   webassets.Frontend
 	initial    *files.MarkdownFile
+	version    string
 	w          webview.WebView
 	hwnd       uintptr
 	logger     *log.Logger
@@ -62,8 +63,8 @@ type Application struct {
 	closing    bool
 }
 
-func New(frontend webassets.Frontend, initial *files.MarkdownFile) *Application {
-	return &Application{frontend: frontend, initial: initial}
+func New(frontend webassets.Frontend, initial *files.MarkdownFile, version string) *Application {
+	return &Application{frontend: frontend, initial: initial, version: version}
 }
 
 func (a *Application) Run() error {
@@ -82,13 +83,6 @@ func (a *Application) Run() error {
 	}
 	window.EnableDPIAwareness()
 	config, _ := settings.Load()
-	width, height := config.Window.Width, config.Window.Height
-	if width < 640 {
-		width = defaultWidth
-	}
-	if height < 480 {
-		height = defaultHeight
-	}
 	dataPath := ""
 	if configPath, err := settings.Path(); err == nil {
 		dataPath = filepath.Join(filepath.Dir(configPath), "webview")
@@ -100,7 +94,7 @@ func (a *Application) Run() error {
 		AutoFocus:     true,
 		DataPath:      dataPath,
 		Debug:         os.Getenv("SYMMD_DEBUG") == "1",
-		WindowOptions: webview.WindowOptions{Title: "Symmd", Width: uint(width), Height: uint(height), Center: true, IconId: applicationIconID},
+		WindowOptions: initialWindowOptions(config.Window),
 	})
 	if w == nil {
 		return errors.New("create WebView2 window: Microsoft Edge WebView2 Runtime is required")
@@ -150,6 +144,7 @@ func (a *Application) bind() error {
 		fn   any
 	}{
 		{"ReportRuntimeEvent", a.reportRuntimeEvent},
+		{"GetVersion", func() string { return a.version }},
 		{"GetInitialFile", func() *files.MarkdownFile { return a.initial }},
 		{"OpenFile", a.openFile},
 		{"ReadFile", files.Read},
@@ -181,6 +176,23 @@ func (a *Application) bind() error {
 	}
 	a.logf("JavaScript bridge registered: methods=%d", len(bindings))
 	return nil
+}
+
+func initialWindowOptions(state settings.WindowState) webview.WindowOptions {
+	width, height := state.Width, state.Height
+	if width < 640 {
+		width = defaultWidth
+	}
+	if height < 480 {
+		height = defaultHeight
+	}
+	options := webview.WindowOptions{Title: "Symmd", Width: uint(width), Height: uint(height), Center: true, IconId: applicationIconID}
+	if state.Width < 640 || state.Height < 480 || !window.IsRectVisible(state.X, state.Y, width, height) {
+		return options
+	}
+	x, y := int(state.X), int(state.Y)
+	options.X, options.Y, options.Center = &x, &y, false
+	return options
 }
 
 const runtimeInstrumentation = `(function () {
