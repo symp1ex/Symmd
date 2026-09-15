@@ -6,7 +6,7 @@ $projectRoot = $PSScriptRoot
 $frontendRoot = Join-Path $projectRoot 'frontend'
 $outputRoot = Join-Path $projectRoot 'dist'
 
-foreach ($command in @('node', 'npm.cmd', 'go')) {
+foreach ($command in @('node', 'npm.cmd', 'go', 'windres')) {
     if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
         throw "$command is required to build symmd."
     }
@@ -16,13 +16,34 @@ Push-Location $frontendRoot
 try {
     if (-not $SkipInstall) { & npm.cmd ci }
     & npm.cmd run build
-    if ($LASTEXITCODE -ne 0) { throw "Frontend build failed with exit code $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Frontend build failed with exit code $LASTEXITCODE"
+    }
 } finally {
     Pop-Location
 }
 
+# Build Windows resources.
+$resourceSource = Join-Path $projectRoot 'cmd\symmd\symmd_windows.rc'
+$resourceObject = Join-Path $projectRoot 'cmd\symmd\symmd_windows_amd64.syso'
+
+& windres `
+    --input-format=rc `
+    --output-format=coff `
+    --target=pe-x86-64 `
+    $resourceSource `
+    $resourceObject
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows resource build failed with exit code $LASTEXITCODE"
+}
+
 New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 $output = Join-Path $outputRoot 'symmd.exe'
+
 go build -trimpath -ldflags='-H windowsgui' -o $output .\cmd\symmd
-if ($LASTEXITCODE -ne 0) { throw "Go build failed with exit code $LASTEXITCODE" }
+if ($LASTEXITCODE -ne 0) {
+    throw "Go build failed with exit code $LASTEXITCODE"
+}
+
 Write-Host "Built $output"

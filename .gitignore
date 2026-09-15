@@ -12,6 +12,7 @@ internal/webassets/dist/
 *.test
 *.log
 *.txt
+*.syso
 *.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
