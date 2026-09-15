@@ -39,7 +39,7 @@ type embeddedAsset struct {
 // cache directory. WebView2 NavigateToString has a 2 MiB limit, which Monaco
 // exceeds, so the caller exposes this directory through virtual host mapping.
 func Load() (Frontend, error) {
-	cache, err := os.UserCacheDir()
+	cache, err := os.UserConfigDir()
 	if err != nil {
 		return Frontend{}, fmt.Errorf("locate user cache: %w", err)
 	}
