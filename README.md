@@ -1,6 +1,6 @@
-# symmd
+# Symmd
 
-`symmd` is a lightweight Windows 10/11 Markdown editor built with Go, WebView2,
+`Symmd` is a lightweight Windows 10/11 Markdown editor built with Go, WebView2,
 React, Vite, TypeScript, Monaco Editor, and markdown-it. It does not use
 Electron and the production frontend is embedded in one `symmd.exe`.
 

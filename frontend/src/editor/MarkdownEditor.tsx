@@ -127,7 +127,7 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
           else if (command === 'selectAll') action = 'editor.action.selectAll'
           if (!action) return
           editor.focus()
-          void editor.getAction(action)?.run()
+          editor.trigger('contextMenu', action, undefined)
         })
         .catch((error: unknown) => native.reportRuntimeEvent('context-menu-error', error instanceof Error ? error.message : String(error)))
     }
