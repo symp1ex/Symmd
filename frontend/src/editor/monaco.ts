@@ -35,6 +35,7 @@ languages.setMonarchTokensProvider('powershell', {
   tokenizer: {
     ...powershellLanguage.tokenizer,
     root: [
+      [/-[a-zA-Z][\w-]*/, 'attribute.name'],
       [/^(\s*)([a-zA-Z][\w]*-[a-zA-Z][\w-]*)/, ['', 'support.function']],
       [/([|;]\s*)([a-zA-Z][\w]*-[a-zA-Z][\w-]*)/, ['delimiter', 'support.function']],
       ...powershellLanguage.tokenizer.root,
@@ -58,6 +59,7 @@ const darkLogRules: editor.ITokenThemeRule[] = [
   { token: 'string.key.log.exception', foreground: 'CE9178', fontStyle: 'italic' },
   { token: 'support.function.bat', foreground: 'DCDCAA' },
   { token: 'support.function.ps1', foreground: 'DCDCAA' },
+  { token: 'attribute.name.ps1', foreground: '569CD6' },
 ]
 
 const lightLogRules: editor.ITokenThemeRule[] = [
@@ -73,6 +75,7 @@ const lightLogRules: editor.ITokenThemeRule[] = [
   { token: 'string.key.log.exception', foreground: 'A31515', fontStyle: 'italic' },
   { token: 'support.function.bat', foreground: '795E26' },
   { token: 'support.function.ps1', foreground: '795E26' },
+  { token: 'attribute.name.ps1', foreground: '0000FF' },
 ]
 
 editor.defineTheme('symmd-dark', { base: 'vs-dark', inherit: true, rules: darkLogRules, colors: {} })
