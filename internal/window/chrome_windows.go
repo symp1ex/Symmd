@@ -150,6 +150,27 @@ func ToggleMaximized(w webview.WebView) bool { return toggleWindowMaximized(w) }
 func Drag(w webview.WebView)                 { dragWindow(w) }
 func Resize(w webview.WebView, hit uintptr)  { resizeWindow(w, hit) }
 func EnableDPIAwareness()                    { setDPIAwareness.Call(^uintptr(3)) }
+func WindowRestoreBounds(hwnd uintptr) (x, y, width, height int32, ok bool) {
+	var current rect
+	if hwnd == 0 {
+		return 0, 0, 0, 0, false
+	}
+	if result, _, _ := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&current))); result == 0 {
+		return 0, 0, 0, 0, false
+	}
+	maximized, _, _ := isZoomed.Call(hwnd)
+	var work rect
+	workAvailable := false
+	if maximized != 0 {
+		monitor, ok := windowMonitorInfo(hwnd)
+		work, workAvailable = monitor.Work, ok
+	}
+	restored, ok := restoreRect(current, maximized != 0, work, workAvailable)
+	if !ok {
+		return 0, 0, 0, 0, false
+	}
+	return restored.Left, restored.Top, restored.Right - restored.Left, restored.Bottom - restored.Top, true
+}
 func IsRectVisible(x, y, width, height int32) bool {
 	if width <= 0 || height <= 0 {
 		return false
@@ -300,6 +321,17 @@ func applyMonitorWorkArea(info *minMaxInfo, monitor monitorInfo) {
 func coversRect(outer, inner rect) bool {
 	return outer.Left <= inner.Left && outer.Top <= inner.Top && outer.Right >= inner.Right && outer.Bottom >= inner.Bottom
 }
+
+func restoreRect(current rect, maximized bool, work rect, workAvailable bool) (rect, bool) {
+	if !maximized {
+		return current, true
+	}
+	if !workAvailable {
+		return rect{}, false
+	}
+	return work, true
+}
+
 func hitTest(hwnd, lParam uintptr, options chromeOptions) uintptr {
 	var r rect
 	if ok, _, _ := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {

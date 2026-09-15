@@ -59,6 +59,8 @@ type checkProcess interface {
 
 type processHandle interface {
 	PID() int
+	Kill() error
+	Resume() error
 	Release() error
 }
 
@@ -85,6 +87,7 @@ type Service struct {
 	resolvePaths func() (Paths, error)
 	startCheck   func(context.Context, Paths, []string) (checkProcess, error)
 	startUpgrade func(Paths, []string) (processHandle, error)
+	stopOthers   func(string) error
 	scheduleExit func(time.Duration)
 }
 
@@ -97,6 +100,7 @@ func NewService() *Service {
 		resolvePaths: ResolvePaths,
 		startCheck:   startCheckProcess,
 		startUpgrade: startUpgradeProcess,
+		stopOthers:   terminateOtherApplicationInstances,
 		scheduleExit: scheduleApplicationExit,
 	}
 }
@@ -261,6 +265,26 @@ func (s *Service) Install() InstallResult {
 	}
 	pid := process.PID()
 	logSink.Debugf("[Updater] Update installation process started: pid=%d", pid)
+	if err := s.stopOthers(paths.ApplicationExe); err != nil {
+		logSink.Errorf("[Updater] Failed to stop other application instances: %v", err)
+		if killErr := process.Kill(); killErr != nil {
+			logSink.Errorf("[Updater] Failed to stop update installation process: pid=%d error=%v", pid, killErr)
+		}
+		if releaseErr := process.Release(); releaseErr != nil {
+			logSink.Errorf("[Updater] Failed to release aborted update installation process handle: pid=%d error=%v", pid, releaseErr)
+		}
+		return InstallResult{Message: err.Error()}
+	}
+	if err := process.Resume(); err != nil {
+		logSink.Errorf("[Updater] Failed to resume update installation process: pid=%d error=%v", pid, err)
+		if killErr := process.Kill(); killErr != nil {
+			logSink.Errorf("[Updater] Failed to stop update installation process: pid=%d error=%v", pid, killErr)
+		}
+		if releaseErr := process.Release(); releaseErr != nil {
+			logSink.Errorf("[Updater] Failed to release aborted update installation process handle: pid=%d error=%v", pid, releaseErr)
+		}
+		return InstallResult{Message: err.Error()}
+	}
 	if err := process.Release(); err != nil {
 		logSink.Errorf("[Updater] Failed to release update installation process handle: pid=%d error=%v", pid, err)
 		return InstallResult{Message: err.Error()}
@@ -393,6 +417,17 @@ func (p commandProcess) PID() int {
 		return 0
 	}
 	return p.process.Pid
+}
+
+func (p commandProcess) Kill() error {
+	if p.process == nil {
+		return nil
+	}
+	return p.process.Kill()
+}
+
+func (p commandProcess) Resume() error {
+	return resumeProcess(p.PID())
 }
 
 func (p commandProcess) Release() error {
