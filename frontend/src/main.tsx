@@ -8,7 +8,7 @@ const bridgeMethods = [
   'ReportRuntimeEvent', 'GetVersion', 'GetInitialFile', 'OpenFile', 'ReadFile', 'SaveFile', 'SaveFileAs',
   'CheckFile', 'ResolveResource', 'OpenLink', 'ConfirmDiscard', 'ConfirmReload',
   'SaveLinkAs', 'ShowContextMenu',
-  'GetPreferences', 'SavePreferences', 'SetDirty', 'WindowMinimize',
+  'GetPreferences', 'SavePreferences', 'CheckApplicationUpdate', 'InstallApplicationUpdate', 'SetDirty', 'WindowMinimize',
   'WindowToggleMaximize', 'WindowClose', 'WindowDrag', 'WindowResize', 'CloseAfterSave',
 ] as const
 

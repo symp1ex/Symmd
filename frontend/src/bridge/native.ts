@@ -23,7 +23,12 @@ export interface Preferences {
   previewZoom: number
   split: number
   autoReloadExternalChanges: boolean
+  checkForUpdates: boolean
 }
+
+export type UpdateCheckStartResult = { ok: boolean; started: boolean; message?: string }
+export type UpdateCheckResult = { ok: boolean; updateAvailable: boolean; message?: string }
+export type UpdateInstallResult = { ok: boolean; message?: string }
 
 export type DroppedItem =
   | { kind: 'file'; file: MarkdownFile }
@@ -49,6 +54,8 @@ declare global {
     ConfirmReload(name: string): Promise<boolean>
     GetPreferences(): Promise<Preferences>
     SavePreferences(preferences: Preferences): Promise<void>
+    CheckApplicationUpdate(automatic: boolean): Promise<UpdateCheckStartResult>
+    InstallApplicationUpdate(): Promise<UpdateInstallResult>
     SetDirty(dirty: boolean): Promise<void>
     WindowMinimize(): Promise<void>
     WindowToggleMaximize(): Promise<boolean>
@@ -76,5 +83,7 @@ export const native = {
   confirmReload: (name: string) => window.ConfirmReload(name),
   getPreferences: () => window.GetPreferences(),
   savePreferences: (preferences: Preferences) => window.SavePreferences(preferences),
+  checkApplicationUpdate: (automatic: boolean) => window.CheckApplicationUpdate(automatic),
+  installApplicationUpdate: () => window.InstallApplicationUpdate(),
   setDirty: (dirty: boolean) => window.SetDirty(dirty),
 }

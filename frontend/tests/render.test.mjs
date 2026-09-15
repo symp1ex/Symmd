@@ -18,6 +18,10 @@ let normalizeMermaidSource
 let renderDiagram
 let renderMermaidBlocks
 let startMermaidRendering
+let activeDocument
+let applySavedFile
+let isDirty
+let requiresSaveAs
 
 class FakeElement {
   constructor(source, width = 640) {
@@ -60,6 +64,7 @@ before(async () => {
   ;({ effectiveViewMode, isSupportedDocumentName, languageForDocument, resolveRegisteredLanguageID } = await server.ssrLoadModule('/src/editor/languages.ts'))
   ;({ isSaveableLink } = await server.ssrLoadModule('/src/preview/linkContext.ts'))
   ;({ mermaidConfiguration, normalizeMermaidSource, renderDiagram, renderMermaidBlocks, startMermaidRendering } = await server.ssrLoadModule('/src/preview/mermaid.ts'))
+  ;({ activeDocument, applySavedFile, isDirty, requiresSaveAs } = await server.ssrLoadModule('/src/app/documents.ts'))
 })
 
 after(async () => {
@@ -534,6 +539,26 @@ test('resolves representative Monaco language ids and aliases', () => {
     assert.equal(resolveRegisteredLanguageID(alias, registered), expected)
   }
   assert.equal(resolveRegisteredLanguageID('unknown-language', registered), undefined)
+})
+
+test('saves the latest active document and keeps saved metadata and dirty state consistent', () => {
+  const first = { id: 'first', path: 'C:\\notes\\first.md', name: 'first.md', content: 'first changed', savedContent: 'first old', modifiedNs: 1 }
+  const second = { id: 'second', path: 'C:\\notes\\second.md', name: 'second.md', content: 'second changed', savedContent: 'second old', modifiedNs: 2 }
+  assert.equal(activeDocument([first, second], 'second'), second)
+  const saved = applySavedFile([first, second], 'second', { path: second.path, name: second.name, content: second.content, modifiedNs: 42 })
+  assert.equal(saved[0], first)
+  assert.equal(saved[1].modifiedNs, 42)
+  assert.equal(saved[1].savedContent, 'second changed')
+  assert.equal(isDirty(saved[1]), false)
+  assert.equal(isDirty(saved[0]), true)
+})
+
+test('routes Ctrl+S and Ctrl+Shift+S to Save or Save As from document state', () => {
+  const existing = { id: 'existing', path: 'C:\\notes\\file.md', name: 'file.md', content: 'changed', savedContent: 'old', modifiedNs: 1 }
+  const unsaved = { ...existing, id: 'new', path: '', name: 'Untitled.md', modifiedNs: 0 }
+  assert.equal(requiresSaveAs(existing, false), false)
+  assert.equal(requiresSaveAs(unsaved, false), true)
+  assert.equal(requiresSaveAs(existing, true), true)
 })
 
 test('classifies VS Code-style log tokens', () => {

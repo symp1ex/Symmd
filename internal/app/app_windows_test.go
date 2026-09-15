@@ -3,6 +3,8 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/symp1ex/symmd/internal/settings"
+	"github.com/symp1ex/symmd/internal/updater"
 	"github.com/symp1ex/symmd/internal/window"
 )
 
@@ -57,6 +60,93 @@ func TestInitialWindowOptionsCentersOffscreenSavedPosition(t *testing.T) {
 func TestLoadInitialRejectsUnsupportedDocument(t *testing.T) {
 	if file, err := LoadInitial([]string{"notes.txt"}); err == nil || file != nil {
 		t.Fatalf("LoadInitial() = %#v, %v", file, err)
+	}
+}
+
+func TestLoadInitialAcceptsUpdaterStartCommand(t *testing.T) {
+	if file, err := LoadInitial([]string{"start"}); err != nil || file != nil {
+		t.Fatalf("LoadInitial(start) = %#v, %v", file, err)
+	}
+}
+
+func TestUpdaterDisabledBlocksAutomaticManualAndInstallRequests(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	config := settings.Defaults()
+	config.Updater.Enabled = false
+	if err := settings.Save(config); err != nil {
+		t.Fatal(err)
+	}
+	service := &fakeUpdateService{}
+	application := &Application{updater: service}
+	for _, automatic := range []bool{true, false} {
+		if result := application.checkApplicationUpdate(automatic); result.OK || result.Started || result.Message != "updater is disabled" {
+			t.Fatalf("checkApplicationUpdate(%t) = %+v", automatic, result)
+		}
+	}
+	if result := application.installApplicationUpdate(); result.OK || result.Message != "updater is disabled" {
+		t.Fatalf("installApplicationUpdate() = %+v", result)
+	}
+	if service.checks != 0 || service.installs != 0 {
+		t.Fatalf("disabled updater calls = checks %d, installs %d", service.checks, service.installs)
+	}
+}
+
+func TestSavePreferencesPreservesWindowAndLoggerSettings(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	config := settings.Defaults()
+	config.Window = settings.WindowState{X: 10, Y: 20, Width: 900, Height: 700}
+	config.Logs.LogLevel.Active = settings.LogLevelDebug
+	config.Logs.StoreDays = 7
+	if err := settings.Save(config); err != nil {
+		t.Fatal(err)
+	}
+	application := &Application{}
+	preferences := clientPreferences{Preferences: config.Preferences, CheckForUpdates: false}
+	preferences.Theme = "light"
+	if err := application.savePreferences(preferences); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := settings.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Window != config.Window || loaded.Logs.LogLevel.Active != settings.LogLevelDebug || loaded.Logs.StoreDays != 7 || loaded.Updater.Enabled || loaded.Preferences.Theme != "light" {
+		t.Fatalf("saved preferences changed unrelated settings: %#v", loaded)
+	}
+}
+
+func TestClientPreferencesBridgeShapeIncludesUpdaterSetting(t *testing.T) {
+	preferences := clientPreferences{Preferences: settings.Defaults().Preferences, CheckForUpdates: true}
+	data, err := json.Marshal(preferences)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["theme"] != "dark" || decoded["checkForUpdates"] != true {
+		t.Fatalf("client preferences JSON = %s", data)
+	}
+}
+
+func TestManualUpdateRequestIgnoresAutomaticTimestamp(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("APPDATA", root)
+	if err := settings.Save(settings.Defaults()); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, "symmd", "last-update-check")
+	if err := os.WriteFile(statePath, []byte("2999-01-01T00:00:00Z"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := &fakeUpdateService{}
+	application := &Application{updater: service}
+	if result := application.checkApplicationUpdate(false); !result.OK || !result.Started {
+		t.Fatalf("manual update check = %+v", result)
+	}
+	if service.checks != 1 {
+		t.Fatalf("manual updater calls = %d, want 1", service.checks)
 	}
 }
 
@@ -140,4 +230,22 @@ func TestSaveLinkTargetDownloadsHTTPLink(t *testing.T) {
 	if string(content) != "downloaded content" {
 		t.Fatalf("downloaded content = %q", content)
 	}
+}
+
+type fakeUpdateService struct {
+	checks   int
+	installs int
+}
+
+func (s *fakeUpdateService) StartCheck(context.Context) (updater.CheckResult, <-chan updater.CheckResult) {
+	s.checks++
+	results := make(chan updater.CheckResult, 1)
+	results <- updater.CheckResult{OK: true}
+	close(results)
+	return updater.CheckResult{OK: true, Message: "update check started"}, results
+}
+
+func (s *fakeUpdateService) Install() updater.InstallResult {
+	s.installs++
+	return updater.InstallResult{OK: true}
 }

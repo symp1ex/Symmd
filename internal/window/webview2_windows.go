@@ -62,6 +62,29 @@ func DisableBrowserZoom(w webview.WebView) error {
 	return nil
 }
 
+func DisableBrowserAcceleratorKeys(w webview.WebView) error {
+	chromium, err := chromiumFromWebView(w)
+	if err != nil {
+		return err
+	}
+	settings, err := chromium.GetSettings()
+	if err != nil {
+		return fmt.Errorf("get WebView2 settings: %w", err)
+	}
+	if err := disableBrowserAcceleratorKeys(settings); err != nil {
+		return fmt.Errorf("disable WebView2 browser accelerator keys: %w", err)
+	}
+	return nil
+}
+
+type browserAcceleratorSettings interface {
+	PutAreBrowserAcceleratorKeysEnabled(bool) error
+}
+
+func disableBrowserAcceleratorKeys(settings browserAcceleratorSettings) error {
+	return settings.PutAreBrowserAcceleratorKeysEnabled(false)
+}
+
 func chromiumFromWebView(w webview.WebView) (*edge.Chromium, error) {
 	value := reflect.ValueOf(w)
 	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() {

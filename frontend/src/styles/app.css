@@ -13,7 +13,12 @@ button { color: inherit; font: inherit; }
 .settings-popover { position: fixed; z-index: 900; top: 36px; right: 109px; width: 240px; display: grid; gap: 12px; padding: 14px; border: 1px solid #454545; border-radius: 4px; background: #252526; box-shadow: 0 8px 24px #0008; font-size: 12px; }
 .settings-popover label { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .settings-popover select, .settings-popover input[type="number"] { width: 92px; color: inherit; background: #3c3c3c; border: 1px solid #555; padding: 3px 5px; }
-.settings-statusbar { height: 22px; display: flex; align-items: center; justify-content: flex-end; margin: 0 -14px -14px; padding: 0 9px; background: #181818; border-top: 1px solid #2b2b2b; color: #9d9d9d; font-size: 11px; }
+.settings-statusbar { height: 22px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: 0 -14px -14px; padding: 0 9px; background: #181818; border-top: 1px solid #2b2b2b; color: #9d9d9d; font-size: 12px; }
+.settings-statusbar__version { border: 0; padding: 0; color: inherit; background: transparent; cursor: pointer; }
+.settings-statusbar__version--disabled, .settings-statusbar__version--checking, .settings-statusbar__version--installing { cursor: default; }
+.settings-statusbar__version--available, .settings-statusbar__version--installing, .settings-statusbar__version--error { color: #ffb4ab; }
+.settings-statusbar__spinner { width: 9px; height: 9px; border: 1px solid #454545; border-top-color: currentColor; border-radius: 50%; animation: settings-spinner 0.8s linear infinite; }
+@keyframes settings-spinner { to { transform: rotate(360deg); } }
 .titlebar { display: flex; align-items: center; background: #181818; border-bottom: 1px solid #2b2b2b; user-select: none; }
 .titlebar__name { width: 82px; padding-left: 12px; color: #f1f1f1; font-size: 12px; font-weight: 600; }
 .titlebar__menu { display: flex; gap: 1px; height: 100%; }

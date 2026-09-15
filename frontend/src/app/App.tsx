@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import { native, type DroppedItem, type MarkdownFile, type Preferences } from '../bridge/native'
+import { native, type DroppedItem, type MarkdownFile, type Preferences, type UpdateCheckResult } from '../bridge/native'
 import { MarkdownEditor } from '../editor/MarkdownEditor'
 import { MarkdownPreview } from '../preview/MarkdownPreview'
 import { defaultPreviewZoom, nextPreviewZoom } from '../preview/zoom'
 import { effectiveViewMode, isLogDocument, isSupportedDocumentName, languageForDocument, type ViewMode } from '../editor/languages'
+import { activeDocument, applySavedFile, isDirty, requiresSaveAs, type DocumentState } from './documents'
 
-interface DocumentState extends MarkdownFile {
-  id: string
-  savedContent: string
-}
+type UpdateState = 'disabled' | 'idle' | 'checking' | 'available' | 'installing' | 'error'
 
 const resizeHandles = [
   ['left', 10], ['right', 11], ['top', 12], ['top-left', 13],
@@ -27,8 +25,6 @@ function newDocument(): DocumentState {
   return { id: `document-${number}`, path: '', name: `Untitled-${number}.md`, content: '', savedContent: '', modifiedNs: 0 }
 }
 
-function isDirty(document: DocumentState): boolean { return document.content !== document.savedContent }
-
 function useDebounced<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value)
   useEffect(() => {
@@ -44,28 +40,113 @@ export function App() {
   const [activeID, setActiveID] = useState(firstDocument.id)
   const [viewMode, setViewMode] = useState<ViewMode>('split')
   const [splitPercent, setSplitPercent] = useState(50)
-  const [preferences, setPreferences] = useState<Preferences>({ theme: 'dark', fontSize: 14, wordWrap: true, viewMode: 'split', previewSync: true, previewZoom: defaultPreviewZoom, split: 50, autoReloadExternalChanges: false })
+  const [preferences, setPreferences] = useState<Preferences>({ theme: 'dark', fontSize: 14, wordWrap: true, viewMode: 'split', previewSync: true, previewZoom: defaultPreviewZoom, split: 50, autoReloadExternalChanges: false, checkForUpdates: true })
   const [version, setVersion] = useState('')
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [editorLine, setEditorLine] = useState(1)
   const [previewLine, setPreviewLine] = useState<number>()
   const [message, setMessage] = useState('')
+  const [updateState, setUpdateState] = useState<UpdateState>('idle')
+  const [updateMessage, setUpdateMessage] = useState('')
   const keyChordRef = useRef(false)
   const promptedChangesRef = useRef(new Set<string>())
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const settingsPopoverRef = useRef<HTMLElement>(null)
   const documentsRef = useRef(documents)
+  const activeIDRef = useRef(activeID)
   const autoReloadExternalChangesRef = useRef(preferences.autoReloadExternalChanges)
+  const checkForUpdatesRef = useRef(preferences.checkForUpdates)
+  const updateStateRef = useRef<UpdateState>('idle')
+  const updateCheckInFlightRef = useRef(false)
   documentsRef.current = documents
+  activeIDRef.current = activeID
   autoReloadExternalChangesRef.current = preferences.autoReloadExternalChanges
+  checkForUpdatesRef.current = preferences.checkForUpdates
 
-  const active = documents.find((document) => document.id === activeID) ?? documents[0]
+  const active = activeDocument(documents, activeID)
   const logDocument = active ? isLogDocument(active) : false
   const activeViewMode = active ? effectiveViewMode(active, viewMode) : viewMode
   const previewSource = useDebounced(active?.content ?? '', 100)
   const persistedSplit = useDebounced(splitPercent, 300)
   const anyDirty = documents.some(isDirty)
+
+  const setUpdateStateValue = useCallback((nextState: UpdateState) => {
+    updateStateRef.current = nextState
+    setUpdateState(nextState)
+  }, [])
+
+  const applyUpdateCheckResult = useCallback((result: UpdateCheckResult) => {
+    updateCheckInFlightRef.current = false
+    if (!checkForUpdatesRef.current) {
+      setUpdateStateValue('disabled')
+      setUpdateMessage('')
+      return
+    }
+    if (result.ok && result.updateAvailable) {
+      setUpdateStateValue('available')
+      setUpdateMessage('Update available')
+      return
+    }
+    if (!result.ok) {
+      setUpdateStateValue('error')
+      if (result.message) setUpdateMessage(`Update check: ${result.message}`)
+      return
+    }
+    setUpdateStateValue('idle')
+    setUpdateMessage('Application is up to date')
+  }, [setUpdateStateValue])
+
+  const runUpdateCheck = useCallback(async (automatic: boolean) => {
+    if (!checkForUpdatesRef.current) {
+      setUpdateStateValue('disabled')
+      setUpdateMessage('')
+      return
+    }
+    const currentState = updateStateRef.current
+    if (updateCheckInFlightRef.current || currentState === 'available' || currentState === 'installing') return
+    updateCheckInFlightRef.current = true
+    setUpdateStateValue('checking')
+    setUpdateMessage('Checking for updates')
+    try {
+      const result = await native.checkApplicationUpdate(automatic)
+      if (!result.ok) {
+        updateCheckInFlightRef.current = false
+        if (result.message === 'updater is disabled') {
+          setUpdateStateValue('disabled')
+          setUpdateMessage('')
+          return
+        }
+        setUpdateStateValue('error')
+        setUpdateMessage(result.message || 'Failed to start update check')
+      } else if (!result.started) {
+        updateCheckInFlightRef.current = false
+        setUpdateStateValue('idle')
+        setUpdateMessage('')
+      }
+    } catch (error) {
+      updateCheckInFlightRef.current = false
+      setUpdateStateValue('error')
+      setUpdateMessage(`Update check failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [setUpdateStateValue])
+
+  const installUpdate = useCallback(async () => {
+    if (!checkForUpdatesRef.current || updateStateRef.current !== 'available') return
+    setUpdateStateValue('installing')
+    try {
+      const result = await native.installApplicationUpdate()
+      if (!result.ok) {
+        setUpdateStateValue('available')
+        setUpdateMessage(result.message || 'Failed to start update installation')
+        return
+      }
+      setUpdateMessage('Starting update installation')
+    } catch (error) {
+      setUpdateStateValue('available')
+      setUpdateMessage(`Update installation failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }, [setUpdateStateValue])
 
   useEffect(() => { void native.setDirty(anyDirty) }, [anyDirty])
 
@@ -83,6 +164,28 @@ export function App() {
     if (!settingsLoaded) return
     void native.savePreferences({ ...preferences, viewMode, split: persistedSplit })
   }, [preferences, settingsLoaded, persistedSplit, viewMode])
+
+  useEffect(() => {
+    const onApplicationUpdateCheckResult = (event: Event) => {
+      const result = (event as CustomEvent<UpdateCheckResult>).detail
+      if (result) applyUpdateCheckResult(result)
+    }
+    window.addEventListener('application-update-check-result', onApplicationUpdateCheckResult)
+    return () => window.removeEventListener('application-update-check-result', onApplicationUpdateCheckResult)
+  }, [applyUpdateCheckResult])
+
+  useEffect(() => {
+    if (!preferences.checkForUpdates) {
+      setUpdateStateValue('disabled')
+      setUpdateMessage('')
+    } else if (updateStateRef.current === 'disabled') {
+      setUpdateStateValue('idle')
+    }
+  }, [preferences.checkForUpdates, setUpdateStateValue])
+
+  useEffect(() => {
+    if (settingsOpen && settingsLoaded) void runUpdateCheck(true)
+  }, [runUpdateCheck, settingsLoaded, settingsOpen])
 
   useEffect(() => {
     const handleWheel = (event: WheelEvent) => {
@@ -156,13 +259,11 @@ export function App() {
 
   const saveDocument = async (document: DocumentState, saveAs = false): Promise<boolean> => {
     try {
-      const file = !document.path || saveAs
+      const file = requiresSaveAs(document, saveAs)
         ? await native.saveFileAs(document.content)
         : await native.saveFile(document.path, document.content)
       if (!file) return false
-      setDocuments((current) => current.map((item) => item.id === document.id
-        ? { ...item, ...file, savedContent: file.content }
-        : item))
+      setDocuments((current) => applySavedFile(current, document.id, file))
       setMessage(`Saved ${file.name}`)
       return true
     } catch (error) {
@@ -236,21 +337,22 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase()
+      const shortcutActive = activeDocument(documentsRef.current, activeIDRef.current)
       if (keyChordRef.current) {
         keyChordRef.current = false
-        if (key === 'v') { event.preventDefault(); if (!active || !isLogDocument(active)) setViewMode('split') }
+        if (key === 'v') { event.preventDefault(); if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('split') }
         return
       }
       if (event.ctrlKey && key === 'k') { keyChordRef.current = true; return }
       if (!event.ctrlKey) return
       if (key === 'n') { event.preventDefault(); const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }
       else if (key === 'o') { event.preventDefault(); void openFile() }
-      else if (key === 's') { event.preventDefault(); if (active) void saveDocument(active, event.shiftKey) }
-      else if (event.shiftKey && key === 'v') { event.preventDefault(); if (!active || !isLogDocument(active)) setViewMode('preview') }
+      else if (key === 's') { event.preventDefault(); if (shortcutActive) void saveDocument(shortcutActive, event.shiftKey) }
+      else if (event.shiftKey && key === 'v') { event.preventDefault(); if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('preview') }
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [active])
+  }, [])
 
   useEffect(() => {
     setEditorLine(1)
@@ -276,6 +378,26 @@ export function App() {
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', stop)
   }
+
+  const activateVersionAction = () => {
+    if (updateState === 'available') {
+      void installUpdate()
+    } else if (updateState === 'error') {
+      setUpdateStateValue('idle')
+      void runUpdateCheck(false)
+    } else if (updateState === 'idle') {
+      void runUpdateCheck(false)
+    }
+  }
+  const versionText = updateState === 'error'
+    ? 'Update error'
+    : updateState === 'available' || updateState === 'installing'
+      ? 'Install update'
+      : version
+  const versionAriaLabel = updateState === 'error'
+    ? 'Retry update check'
+    : updateState === 'available' ? 'Install update' : `Application version ${versionText}`
+  const updateSpinnerVisible = updateState === 'checking' || updateState === 'installing'
 
   return (
     <div
@@ -360,7 +482,22 @@ export function App() {
           <label><input type="checkbox" checked={preferences.wordWrap} onChange={(event) => setPreferences((current) => ({ ...current, wordWrap: event.target.checked }))} /> Word wrap</label>
           <label><input type="checkbox" checked={preferences.previewSync} onChange={(event) => setPreferences((current) => ({ ...current, previewSync: event.target.checked }))} /> Preview scroll sync</label>
           <label><input type="checkbox" checked={preferences.autoReloadExternalChanges} onChange={(event) => setPreferences((current) => ({ ...current, autoReloadExternalChanges: event.target.checked }))} /> Autoreload external changes</label>
-          <footer className="settings-statusbar">{version}</footer>
+          <label><input type="checkbox" checked={preferences.checkForUpdates} onChange={(event) => setPreferences((current) => ({ ...current, checkForUpdates: event.target.checked }))} /> Check for updates</label>
+          <footer className="settings-statusbar">
+            {versionText && (
+              <button
+                type="button"
+                className={`settings-statusbar__version settings-statusbar__version--${updateState}`}
+                aria-label={versionAriaLabel}
+                aria-disabled={updateState === 'disabled' || updateState === 'checking' || updateState === 'installing'}
+                title={updateMessage || versionAriaLabel}
+                onClick={activateVersionAction}
+              >
+                {versionText}
+              </button>
+            )}
+            {updateSpinnerVisible && <span className="settings-statusbar__spinner" role="status" aria-label={updateState === 'installing' ? 'Starting update installation' : 'Checking for updates'} />}
+          </footer>
         </aside>
       )}
       <div className="tabs" role="tablist">

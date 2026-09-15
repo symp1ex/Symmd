@@ -3,10 +3,11 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,11 +17,14 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	webview "github.com/symp1ex/go-webview2"
 	"github.com/symp1ex/symmd/internal/files"
+	"github.com/symp1ex/symmd/internal/logger"
 	"github.com/symp1ex/symmd/internal/settings"
+	"github.com/symp1ex/symmd/internal/updater"
 	"github.com/symp1ex/symmd/internal/webassets"
 	"github.com/symp1ex/symmd/internal/window"
 )
@@ -50,13 +54,30 @@ var (
 
 type nativeRect struct{ Left, Top, Right, Bottom int32 }
 
+type clientPreferences struct {
+	settings.Preferences
+	CheckForUpdates bool `json:"checkForUpdates"`
+}
+
+type updateCheckStartResult struct {
+	OK      bool   `json:"ok"`
+	Started bool   `json:"started"`
+	Message string `json:"message,omitempty"`
+}
+
+type updateService interface {
+	StartCheck(context.Context) (updater.CheckResult, <-chan updater.CheckResult)
+	Install() updater.InstallResult
+}
+
 type Application struct {
 	frontend   webassets.Frontend
 	initial    *files.MarkdownFile
 	version    string
 	w          webview.WebView
 	hwnd       uintptr
-	logger     *log.Logger
+	logger     logger.Logger
+	updater    updateService
 	mu         sync.Mutex
 	settingsMu sync.Mutex
 	dirty      bool
@@ -64,25 +85,30 @@ type Application struct {
 }
 
 func New(frontend webassets.Frontend, initial *files.MarkdownFile, version string) *Application {
-	return &Application{frontend: frontend, initial: initial, version: version}
+	return &Application{frontend: frontend, initial: initial, version: version, updater: updater.DefaultService}
 }
 
 func (a *Application) Run() error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	logger, logFile, logPath := openRuntimeLog()
-	a.logger = logger
-	if logFile != nil {
-		defer logFile.Close()
+	config, settingsErr := settings.Load()
+	if settingsErr != nil {
+		config = settings.Defaults()
 	}
-	a.logf("application starting: frontend_url=%s assets_dir=%s version=%s files=%d bytes=%d initial_file=%t log=%s", a.frontend.URL, a.frontend.Directory, a.frontend.Version, a.frontend.FileCount, a.frontend.TotalBytes, a.initial != nil, logPath)
+	logger.Configure(config.Logs)
+	a.logger = logger.Symmd
+	updater.SetLogger(a.logger)
+	updater.DefaultService.SetLogs(config.Logs)
+	if settingsErr != nil {
+		a.logger.Warnf("settings load failed; using defaults: %v", settingsErr)
+	}
+	a.logger.Infof("application starting: frontend_url=%s assets_dir=%s version=%s files=%d bytes=%d initial_file=%t log=%s", a.frontend.URL, a.frontend.Directory, a.frontend.Version, a.frontend.FileCount, a.frontend.TotalBytes, a.initial != nil, filepath.Join(logger.Directory(), "symmd.log"))
 	if changed, err := registerFileAssociations(); err != nil {
-		a.logf("file association registration failed: %v", err)
+		a.logger.Errorf("file association registration failed: %v", err)
 	} else if changed {
-		a.logf("file association registration updated")
+		a.logger.Infof("file association registration updated")
 	}
 	window.EnableDPIAwareness()
-	config, _ := settings.Load()
 	dataPath := ""
 	if configPath, err := settings.Path(); err == nil {
 		dataPath = filepath.Join(filepath.Dir(configPath), "webview")
@@ -100,7 +126,7 @@ func (a *Application) Run() error {
 		return errors.New("create WebView2 window: Microsoft Edge WebView2 Runtime is required")
 	}
 	a.w, a.hwnd = w, uintptr(w.Window())
-	a.logf("WebView2 created: hwnd=%d data_dir=%s", a.hwnd, dataPath)
+	a.logger.Debugf("WebView2 created: hwnd=%d data_dir=%s", a.hwnd, dataPath)
 	if a.hwnd == 0 {
 		w.Destroy()
 		return errors.New("WebView2 window did not provide an HWND")
@@ -113,9 +139,13 @@ func (a *Application) Run() error {
 		w.Destroy()
 		return err
 	}
+	if err := window.DisableBrowserAcceleratorKeys(w); err != nil {
+		w.Destroy()
+		return err
+	}
 	a.installRuntimeInstrumentation()
 	if err := window.ConfigureFrontendOrigin(w, webassets.Host, a.frontend.Directory, func() {
-		a.logf("navigation completed")
+		a.logger.Debugf("navigation completed")
 		w.Eval(`if (typeof window.ReportRuntimeEvent === "function") { window.ReportRuntimeEvent("navigation-completed", window.location.href) }`)
 	}); err != nil {
 		w.Destroy()
@@ -129,10 +159,13 @@ func (a *Application) Run() error {
 		w.Destroy()
 		return fmt.Errorf("apply window icon: %w", err)
 	}
-	a.logf("navigation starting: url=%s", a.frontend.URL)
+	a.logger.Debugf("navigation starting: url=%s", a.frontend.URL)
 	w.Navigate(a.frontend.URL)
 	w.Run()
-	a.logf("message loop stopped")
+	a.logger.Infof("message loop stopped")
+	a.mu.Lock()
+	a.closing = true
+	a.mu.Unlock()
 	a.persistWindowState()
 	w.Destroy()
 	return nil
@@ -161,6 +194,8 @@ func (a *Application) bind() error {
 		{"ConfirmReload", a.confirmReload},
 		{"GetPreferences", a.getPreferences},
 		{"SavePreferences", a.savePreferences},
+		{"CheckApplicationUpdate", a.checkApplicationUpdate},
+		{"InstallApplicationUpdate", a.installApplicationUpdate},
 		{"SetDirty", a.setDirty},
 		{"WindowMinimize", func() { window.Minimize(a.w) }},
 		{"WindowToggleMaximize", func() bool { return window.ToggleMaximized(a.w) }},
@@ -174,7 +209,7 @@ func (a *Application) bind() error {
 			return fmt.Errorf("bind %s: %w", binding.name, err)
 		}
 	}
-	a.logf("JavaScript bridge registered: methods=%d", len(bindings))
+	a.logger.Debugf("JavaScript bridge registered: methods=%d", len(bindings))
 	return nil
 }
 
@@ -275,39 +310,24 @@ func (a *Application) reportRuntimeEvent(kind, detail string) {
 	if len(runes) > 2048 {
 		detail = string(runes[:2048]) + "..."
 	}
-	a.logf("frontend event: %s: %s", kind, detail)
-}
-
-func (a *Application) logf(format string, values ...any) {
-	if a.logger != nil {
-		a.logger.Printf(format, values...)
+	switch kind {
+	case "bootstrap-error", "bridge-missing", "drop-error", "frontend-error", "resource-error", "unhandled-rejection", "context-menu-error", "monaco-worker-error":
+		a.logger.Errorf("frontend event: %s: %s", kind, detail)
+	case "drop-rejected":
+		a.logger.Warnf("frontend event: %s: %s", kind, detail)
+	default:
+		a.logger.Debugf("frontend event: %s: %s", kind, detail)
 	}
-}
-
-func openRuntimeLog() (*log.Logger, *os.File, string) {
-	configPath, err := settings.Path()
-	if err != nil {
-		return log.New(io.Discard, "", 0), nil, "unavailable"
-	}
-	logPath := filepath.Join(filepath.Dir(configPath), "runtime.log")
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		return log.New(io.Discard, "", 0), nil, "unavailable"
-	}
-	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
-	if info, err := os.Stat(logPath); err == nil && info.Size() > 1<<20 {
-		flags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-	}
-	file, err := os.OpenFile(logPath, flags, 0o600)
-	if err != nil {
-		return log.New(io.Discard, "", 0), nil, "unavailable"
-	}
-	return log.New(file, "symmd ", log.Ldate|log.Ltime|log.Lmicroseconds), file, logPath
 }
 
 func (a *Application) openFile() (*files.MarkdownFile, error) {
-	a.logf("SelectMarkdownFile call: owner=%d", a.hwnd)
-	path, cancelled, err := window.SelectMarkdownFile(a.hwnd, a.logf)
-	a.logf("SelectMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
+	a.logger.Debugf("SelectMarkdownFile call: owner=%d", a.hwnd)
+	path, cancelled, err := window.SelectMarkdownFile(a.hwnd, a.logger.Debugf)
+	if err != nil {
+		a.logger.Errorf("SelectMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
+	} else {
+		a.logger.Debugf("SelectMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
+	}
 	if err != nil || cancelled {
 		return nil, err
 	}
@@ -322,9 +342,13 @@ func (a *Application) openFile() (*files.MarkdownFile, error) {
 }
 
 func (a *Application) saveFileAs(content string) (*files.MarkdownFile, error) {
-	a.logf("SaveMarkdownFile call: owner=%d", a.hwnd)
-	path, cancelled, err := window.SaveMarkdownFile(a.hwnd, "document.md", a.logf)
-	a.logf("SaveMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
+	a.logger.Debugf("SaveMarkdownFile call: owner=%d", a.hwnd)
+	path, cancelled, err := window.SaveMarkdownFile(a.hwnd, "document.md", a.logger.Debugf)
+	if err != nil {
+		a.logger.Errorf("SaveMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
+	} else {
+		a.logger.Debugf("SaveMarkdownFile return: cancelled=%t selected=%t error=%v", cancelled, path != "", err)
+	}
 	if err != nil || cancelled {
 		return nil, err
 	}
@@ -379,25 +403,107 @@ func (a *Application) confirmReload(name string) bool {
 	return a.message(name+" was changed by another application. Reload it from disk?", "File changed", messageYesNo|messageIconWarning) == idYes
 }
 
-func (a *Application) getPreferences() settings.Preferences {
+func (a *Application) getPreferences() clientPreferences {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
 	config, err := settings.Load()
 	if err != nil {
-		return settings.Defaults().Preferences
+		config = settings.Defaults()
 	}
-	return config.Preferences
+	return clientPreferences{Preferences: config.Preferences, CheckForUpdates: config.Updater.Enabled}
 }
 
-func (a *Application) savePreferences(preferences settings.Preferences) error {
+func (a *Application) savePreferences(preferences clientPreferences) error {
 	a.settingsMu.Lock()
 	defer a.settingsMu.Unlock()
 	config, err := settings.Load()
 	if err != nil {
 		return err
 	}
-	config.Preferences = settings.NormalizePreferences(preferences)
+	config.Preferences = settings.NormalizePreferences(preferences.Preferences)
+	config.Updater.Enabled = preferences.CheckForUpdates
 	return settings.Save(config)
+}
+
+func (a *Application) checkApplicationUpdate(automatic bool) updateCheckStartResult {
+	enabled, err := a.updaterEnabled()
+	if err != nil {
+		return updateCheckStartResult{Message: err.Error()}
+	}
+	if !enabled {
+		a.logger.Warnf("[Updater] Update check request ignored because updater is disabled")
+		return updateCheckStartResult{Message: "updater is disabled"}
+	}
+
+	var initial updater.CheckResult
+	var results <-chan updater.CheckResult
+	start := func() error {
+		initial, results = a.updater.StartCheck(context.Background())
+		if !initial.OK {
+			return errors.New(initial.Message)
+		}
+		return nil
+	}
+	if automatic {
+		started, gateErr := updater.TryAutoCheck(time.Now(), start)
+		if gateErr != nil {
+			return updateCheckStartResult{Message: gateErr.Error()}
+		}
+		if !started {
+			return updateCheckStartResult{OK: true}
+		}
+	} else if err := start(); err != nil {
+		return updateCheckStartResult{Message: err.Error()}
+	}
+
+	go func() {
+		if result, ok := <-results; ok {
+			a.dispatchApplicationUpdateCheckResult(result)
+		}
+	}()
+	return updateCheckStartResult{OK: true, Started: true, Message: initial.Message}
+}
+
+func (a *Application) installApplicationUpdate() updater.InstallResult {
+	enabled, err := a.updaterEnabled()
+	if err != nil {
+		return updater.InstallResult{Message: err.Error()}
+	}
+	if !enabled {
+		a.logger.Warnf("[Updater] Update installation request ignored because updater is disabled")
+		return updater.InstallResult{Message: "updater is disabled"}
+	}
+	return a.updater.Install()
+}
+
+func (a *Application) updaterEnabled() (bool, error) {
+	a.settingsMu.Lock()
+	defer a.settingsMu.Unlock()
+	config, err := settings.Load()
+	if err != nil {
+		return false, err
+	}
+	return config.Updater.Enabled, nil
+}
+
+func (a *Application) dispatchApplicationUpdateCheckResult(result updater.CheckResult) {
+	a.mu.Lock()
+	w := a.w
+	closing := a.closing
+	a.mu.Unlock()
+	if closing || w == nil {
+		a.logger.Debugf("[Updater] Update check result skipped because the application window is closed")
+		return
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		a.logger.Warnf("[Updater] Failed to marshal update check result: %v", err)
+		return
+	}
+	a.logger.Debugf("[Updater] Dispatching update check result")
+	w.Dispatch(func() {
+		w.Eval(fmt.Sprintf(`window.dispatchEvent(new CustomEvent("application-update-check-result", { detail: %s }));`, payload))
+	})
 }
 
 func (a *Application) message(text, title string, flags uintptr) uintptr {
@@ -481,7 +587,7 @@ func (a *Application) saveLinkAs(documentPath, reference string) error {
 			return errors.New("relative link points to a directory")
 		}
 	}
-	destination, cancelled, err := window.SaveLinkFile(a.hwnd, linkFileName(parsed, target), a.logf)
+	destination, cancelled, err := window.SaveLinkFile(a.hwnd, linkFileName(parsed, target), a.logger.Debugf)
 	if err != nil || cancelled {
 		return err
 	}
@@ -617,6 +723,9 @@ func (a *Application) persistWindowState() {
 
 func LoadInitial(arguments []string) (*files.MarkdownFile, error) {
 	if len(arguments) == 0 {
+		return nil, nil
+	}
+	if len(arguments) == 1 && arguments[0] == "start" {
 		return nil, nil
 	}
 	path := arguments[0]
