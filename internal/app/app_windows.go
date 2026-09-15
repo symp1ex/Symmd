@@ -45,14 +45,11 @@ const (
 var (
 	user32        = syscall.NewLazyDLL("user32.dll")
 	messageBoxW   = user32.NewProc("MessageBoxW")
-	getWindowRect = user32.NewProc("GetWindowRect")
 	shell32       = syscall.NewLazyDLL("shell32.dll")
 	shellExecuteW = shell32.NewProc("ShellExecuteW")
 	kernel32      = syscall.NewLazyDLL("kernel32.dll")
 	moveFileExW   = kernel32.NewProc("MoveFileExW")
 )
-
-type nativeRect struct{ Left, Top, Right, Bottom int32 }
 
 type clientPreferences struct {
 	settings.Preferences
@@ -705,11 +702,10 @@ func (a *Application) persistWindowState() {
 	if a.hwnd == 0 {
 		return
 	}
-	var r nativeRect
-	if ok, _, _ := getWindowRect.Call(a.hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+	x, y, width, height, ok := window.WindowRestoreBounds(a.hwnd)
+	if !ok {
 		return
 	}
-	width, height := r.Right-r.Left, r.Bottom-r.Top
 	if width < 640 || height < 480 {
 		return
 	}
@@ -717,7 +713,7 @@ func (a *Application) persistWindowState() {
 	if err != nil {
 		config = settings.Defaults()
 	}
-	config.Window = settings.WindowState{X: r.Left, Y: r.Top, Width: width, Height: height}
+	config.Window = settings.WindowState{X: x, Y: y, Width: width, Height: height}
 	_ = settings.Save(config)
 }
 

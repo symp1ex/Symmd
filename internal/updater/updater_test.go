@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -68,6 +69,14 @@ func TestPathsUseUpdaterSMDExecutable(t *testing.T) {
 	}
 }
 
+func TestUpgradeProcessStartsSuspended(t *testing.T) {
+	command := exec.Command("updater-smd.exe")
+	setDetachedProcessAttributes(command)
+	if command.SysProcAttr == nil || command.SysProcAttr.CreationFlags&createSuspended == 0 {
+		t.Fatalf("upgrade creation flags = %#v", command.SysProcAttr)
+	}
+}
+
 func TestMissingUpdaterIsReported(t *testing.T) {
 	_, err := pathsForExecutable(filepath.Join(t.TempDir(), "symmd.exe"))
 	if err == nil {
@@ -113,17 +122,75 @@ func TestServiceRejectsParallelCheck(t *testing.T) {
 
 func TestServiceInstallUsesUpdaterProtocolAndSchedulesExit(t *testing.T) {
 	service := newTestService()
-	process := &fakeProcess{pid: 42}
 	var gotArgs []string
+	var stoppedExecutable string
+	process := &fakeProcess{pid: 42, onResume: func() {
+		if stoppedExecutable == "" {
+			t.Error("updater resumed before other instances stopped")
+		}
+	}}
 	var scheduled []time.Duration
 	service.startUpgrade = func(_ Paths, args []string) (processHandle, error) {
 		gotArgs = append([]string(nil), args...)
 		return process, nil
 	}
+	service.stopOthers = func(applicationExecutable string) error {
+		stoppedExecutable = applicationExecutable
+		return nil
+	}
 	service.scheduleExit = func(after time.Duration) { scheduled = append(scheduled, after) }
 	result := service.Install()
-	if !result.OK || !process.released || !containsSequence(gotArgs, []string{"--cmd", "symmd.exe start"}) || !reflect.DeepEqual(scheduled, []time.Duration{exitDelay}) {
-		t.Fatalf("Install() = %+v, args=%v, released=%t, scheduled=%v", result, gotArgs, process.released, scheduled)
+	if !result.OK || !process.resumed || !process.released || stoppedExecutable != testPaths().ApplicationExe || !containsSequence(gotArgs, []string{"--cmd", "symmd.exe start"}) || !reflect.DeepEqual(scheduled, []time.Duration{exitDelay}) {
+		t.Fatalf("Install() = %+v, args=%v, stopped=%q, resumed=%t, released=%t, scheduled=%v", result, gotArgs, stoppedExecutable, process.resumed, process.released, scheduled)
+	}
+}
+
+func TestServiceInstallDoesNotStopInstancesWhenUpdaterStartFails(t *testing.T) {
+	service := newTestService()
+	startErr := errors.New("create process failed")
+	service.startUpgrade = func(Paths, []string) (processHandle, error) { return nil, startErr }
+	stops := 0
+	service.stopOthers = func(string) error { stops++; return nil }
+	result := service.Install()
+	if result.OK || result.Message != startErr.Error() || stops != 0 {
+		t.Fatalf("Install() = %+v, stops=%d", result, stops)
+	}
+}
+
+func TestServiceInstallAbortsUpdaterWhenOtherInstancesCannotStop(t *testing.T) {
+	service := newTestService()
+	process := &fakeProcess{pid: 42}
+	service.startUpgrade = func(Paths, []string) (processHandle, error) { return process, nil }
+	stopErr := errors.New("access denied")
+	service.stopOthers = func(string) error { return stopErr }
+	scheduled := false
+	service.scheduleExit = func(time.Duration) { scheduled = true }
+	result := service.Install()
+	if result.OK || result.Message != stopErr.Error() || !process.killed || process.resumed || !process.released || scheduled {
+		t.Fatalf("Install() = %+v, killed=%t, resumed=%t, released=%t, scheduled=%t", result, process.killed, process.resumed, process.released, scheduled)
+	}
+}
+
+func TestServiceInstallAbortsUpdaterWhenResumeFails(t *testing.T) {
+	service := newTestService()
+	resumeErr := errors.New("resume failed")
+	process := &fakeProcess{pid: 42, resumeErr: resumeErr}
+	service.startUpgrade = func(Paths, []string) (processHandle, error) { return process, nil }
+	scheduled := false
+	service.scheduleExit = func(time.Duration) { scheduled = true }
+	result := service.Install()
+	if result.OK || result.Message != resumeErr.Error() || !process.killed || !process.released || scheduled {
+		t.Fatalf("Install() = %+v, killed=%t, released=%t, scheduled=%t", result, process.killed, process.released, scheduled)
+	}
+}
+
+func TestSameApplicationExecutableRejectsSameNameFromAnotherDirectory(t *testing.T) {
+	target := filepath.Join(`C:\Program Files`, "Symmd", "Symmd.exe")
+	if !sameApplicationExecutable(target, filepath.Join(`c:\program files`, "symmd", "symmd.EXE")) {
+		t.Fatal("case-insensitive matching executable path was rejected")
+	}
+	if sameApplicationExecutable(target, filepath.Join(`C:\Portable`, "Symmd.exe")) {
+		t.Fatal("same executable name from another directory was accepted")
 	}
 }
 
@@ -227,6 +294,7 @@ func newTestService() *Service {
 	service.startCheck = func(context.Context, Paths, []string) (checkProcess, error) {
 		return &fakeCheckProcess{output: processOutput{Stdout: "false"}}, nil
 	}
+	service.stopOthers = func(string) error { return nil }
 	service.scheduleExit = func(time.Duration) {}
 	return service
 }
@@ -262,11 +330,28 @@ func (p *fakeCheckProcess) Wait() (processOutput, error) {
 }
 
 type fakeProcess struct {
-	pid      int
-	released bool
+	pid       int
+	killed    bool
+	resumed   bool
+	resumeErr error
+	onResume  func()
+	released  bool
 }
 
 func (p *fakeProcess) PID() int { return p.pid }
+
+func (p *fakeProcess) Kill() error {
+	p.killed = true
+	return nil
+}
+
+func (p *fakeProcess) Resume() error {
+	p.resumed = true
+	if p.onResume != nil {
+		p.onResume()
+	}
+	return p.resumeErr
+}
 
 func (p *fakeProcess) Release() error {
 	p.released = true
