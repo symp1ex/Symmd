@@ -359,7 +359,7 @@ export function App() {
           <label>Editor font size<input type="number" min="10" max="32" value={preferences.fontSize} onChange={(event) => setPreferences((current) => ({ ...current, fontSize: Math.min(32, Math.max(10, Number(event.target.value))) }))} /></label>
           <label><input type="checkbox" checked={preferences.wordWrap} onChange={(event) => setPreferences((current) => ({ ...current, wordWrap: event.target.checked }))} /> Word wrap</label>
           <label><input type="checkbox" checked={preferences.previewSync} onChange={(event) => setPreferences((current) => ({ ...current, previewSync: event.target.checked }))} /> Preview scroll sync</label>
-          <label><input type="checkbox" checked={preferences.autoReloadExternalChanges} onChange={(event) => setPreferences((current) => ({ ...current, autoReloadExternalChanges: event.target.checked }))} /> Automatically reload external changes</label>
+          <label><input type="checkbox" checked={preferences.autoReloadExternalChanges} onChange={(event) => setPreferences((current) => ({ ...current, autoReloadExternalChanges: event.target.checked }))} /> Autoreload external changes</label>
           <footer className="settings-statusbar">{version}</footer>
         </aside>
       )}

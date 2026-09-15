@@ -48,7 +48,7 @@ languages.setMonarchTokensProvider('log', logLanguage)
 
 const darkLogRules: editor.ITokenThemeRule[] = [
   { token: 'comment.log.verbose', foreground: '6A9955' },
-  { token: 'markup.changed.log.debug', foreground: 'FAC669' },
+  { token: 'markup.changed.log.debug', foreground: 'D0AC75' },
   { token: 'markup.inserted.log.info', foreground: 'B5CEA8' },
   { token: 'markup.deleted.log.warning', foreground: 'CE9178' },
   { token: 'string.regexp.log.error', foreground: 'D16969', fontStyle: 'bold' },
@@ -64,7 +64,7 @@ const darkLogRules: editor.ITokenThemeRule[] = [
 
 const lightLogRules: editor.ITokenThemeRule[] = [
   { token: 'comment.log.verbose', foreground: '008000' },
-  { token: 'markup.changed.log.debug', foreground: 'FAC669' },
+  { token: 'markup.changed.log.debug', foreground: 'D0AC75' },
   { token: 'markup.inserted.log.info', foreground: '098658' },
   { token: 'markup.deleted.log.warning', foreground: 'A31515' },
   { token: 'string.regexp.log.error', foreground: '811F3F', fontStyle: 'bold' },
