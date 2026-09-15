@@ -41,6 +41,33 @@ sequenceDiagram
 ```
 
 ```mermaid
+gitgraph
+    commit id: "Initial commit"
+    branch develop
+    checkout develop
+    commit id: "<img src=x onerror=window.__mermaidInjected=true> gitgraph"
+```
+
+```mermaid
+gitGraph
+    commit id: "Canonical declaration"
+```
+
+```mermaid
+gantt
+    title Feature Roadmap 2025
+    dateFormat YYYY-MM-DD
+
+    section Core Features
+    Dark Mode Support      :done, core1, 2025-01-01, 14d
+    Syntax Highlighting    :done, core2, 2025-01-10, 21d
+
+    section Advanced Features
+    Mermaid Diagrams       :active, adv1, 2025-02-01, 28d
+    Export to PDF          :adv2, 2025-03-01, 14d
+```
+
+```mermaid
 flowchart LR
     A["<script>window.__mermaidInjected = true</script>"] --> B[Safe]
 ```

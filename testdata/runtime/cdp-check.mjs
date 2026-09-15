@@ -71,8 +71,17 @@ async function snapshot() {
     previewMermaidErrorText: [...document.querySelectorAll('.markdown-preview .mermaid-diagram__error')].map((node) => node.textContent),
     previewMermaidUnsafe: document.querySelectorAll('.markdown-preview .mermaid-diagram script,.markdown-preview .mermaid-diagram iframe,.markdown-preview .mermaid-diagram [onload],.markdown-preview .mermaid-diagram [onerror],.markdown-preview .mermaid-diagram [onclick]').length,
     previewMermaidJavascriptLinks: [...document.querySelectorAll('.markdown-preview .mermaid-diagram a')].filter((node) => /^javascript:/i.test(node.getAttribute('href') ?? '')).length,
+    previewLowercaseGitGraphSvg: Boolean([...document.querySelectorAll('.mermaid-diagram')].find((node) => /^\\s*gitgraph(?:\\s|$)/.test(node.dataset.mermaidSource ?? ''))?.querySelector(':scope > svg')),
+    previewCanonicalGitGraphSvg: Boolean([...document.querySelectorAll('.mermaid-diagram')].find((node) => /^\\s*gitGraph(?:\\s|$)/.test(node.dataset.mermaidSource ?? ''))?.querySelector(':scope > svg')),
+    previewGanttGeometry: (() => {
+      const container = [...document.querySelectorAll('.mermaid-diagram')].find((node) => /^\\s*gantt(?:\\s|$)/.test(node.dataset.mermaidSource ?? ''))
+      const svg = container?.querySelector(':scope > svg')
+      return container && svg ? { containerWidth: container.offsetWidth, viewBoxWidth: svg.viewBox.baseVal.width } : null
+    })(),
+    temporaryMermaidContainers: document.querySelectorAll('[data-symmd-mermaid-render-host]').length,
     mermaidInjected: window.__mermaidInjected === true,
     mermaidThemeProbe: window.__symmdMermaidThemeProbe,
+    mermaidResizeProbe: window.__symmdMermaidResizeProbe,
     previewImages: [...document.querySelectorAll('.markdown-preview img')].map((node) => ({
       alt: node.alt,
       naturalWidth: node.naturalWidth,
@@ -249,6 +258,59 @@ if (action === 'snapshot') {
     changed: ${JSON.stringify(previousSvg)} !== (document.querySelector('.mermaid-diagram > svg')?.outerHTML ?? ''),
     previewClass: document.querySelector('.markdown-preview')?.className,
   }`)
+} else if (action === 'mermaid-resize') {
+  await wait(2500)
+  await evaluate(`(() => {
+    window.__symmdMermaidTemporaryWidths = []
+    window.__symmdMermaidTemporaryObserver = new MutationObserver((records) => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (node instanceof HTMLElement && 'symmdMermaidRenderHost' in node.dataset) {
+          window.__symmdMermaidTemporaryWidths.push({ style: node.style.width, offset: node.offsetWidth })
+        }
+      }
+    })
+    window.__symmdMermaidTemporaryObserver.observe(document.body, { childList: true })
+  })()`)
+  const measureGantt = () => evaluate(`(() => {
+    const container = [...document.querySelectorAll('.mermaid-diagram')].find((node) => /^\\s*gantt(?:\\s|$)/.test(node.dataset.mermaidSource ?? ''))
+    const svg = container?.querySelector(':scope > svg')
+    return container && svg ? { containerWidth: container.offsetWidth, viewBoxWidth: svg.viewBox.baseVal.width } : null
+  })()`)
+  const waitForGanttWidth = async (previousWidth) => {
+    await wait(100)
+    const deadline = Date.now() + 10000
+    let geometry
+    do {
+      geometry = await measureGantt()
+      if (geometry?.containerWidth === geometry?.viewBoxWidth && geometry?.containerWidth !== previousWidth) return geometry
+      await wait(100)
+    } while (Date.now() < deadline)
+    return geometry
+  }
+  const initial = await measureGantt()
+  await evaluate(`[...document.querySelectorAll('.view-switcher button')].find((button) => button.textContent === 'Preview')?.click()`)
+  const preview = await waitForGanttWidth(initial?.containerWidth)
+  await evaluate(`document.querySelector('.markdown-preview')?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, ctrlKey: true, deltaY: -1 }))`)
+  const zoomedPreview = await waitForGanttWidth(preview?.containerWidth)
+  await evaluate(`document.querySelector('.markdown-preview')?.dispatchEvent(new WheelEvent('wheel', { bubbles: true, ctrlKey: true, deltaY: 1 }))`)
+  const restoredZoom = await waitForGanttWidth(zoomedPreview?.containerWidth)
+  await evaluate(`[...document.querySelectorAll('.view-switcher button')].find((button) => button.textContent === 'Split')?.click()`)
+  const split = await waitForGanttWidth(restoredZoom?.containerWidth)
+  await evaluate(`document.querySelector('.editor-pane')?.style.setProperty('width', '35%')`)
+  const resizedSplit = await waitForGanttWidth(split?.containerWidth)
+  await evaluate(`(() => {
+    window.__symmdMermaidTemporaryObserver?.disconnect()
+    window.__symmdMermaidResizeProbe = {
+      initial: ${JSON.stringify(initial)},
+      preview: ${JSON.stringify(preview)},
+      zoomedPreview: ${JSON.stringify(zoomedPreview)},
+      restoredZoom: ${JSON.stringify(restoredZoom)},
+      split: ${JSON.stringify(split)},
+      resizedSplit: ${JSON.stringify(resizedSplit)},
+      temporaryWidths: window.__symmdMermaidTemporaryWidths,
+      temporaryRemaining: document.querySelectorAll('[data-symmd-mermaid-render-host]').length,
+    }
+  })()`)
 } else if (action === 'click-open') {
   await evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent === 'Open')?.click()`)
 } else if (action === 'click-save') {
@@ -286,6 +348,20 @@ if (action === 'snapshot') {
 }
 
 const state = await snapshot()
+if (action === 'mermaid-resize') {
+  const geometries = ['initial', 'preview', 'zoomedPreview', 'restoredZoom', 'split', 'resizedSplit'].map((name) => [name, state.mermaidResizeProbe?.[name]])
+  for (const [name, geometry] of geometries) {
+    if (!geometry || geometry.containerWidth !== geometry.viewBoxWidth || geometry.viewBoxWidth <= 300) {
+      throw new Error(`Unexpected Gantt geometry for ${name}: ${JSON.stringify(geometry)}`)
+    }
+  }
+  if (!state.previewLowercaseGitGraphSvg || !state.previewCanonicalGitGraphSvg || state.previewMermaidUnsafe || state.mermaidInjected) {
+    throw new Error('Mermaid Git Graph or security runtime regression detected')
+  }
+  if (!state.mermaidResizeProbe.temporaryWidths.length || state.mermaidResizeProbe.temporaryWidths.some((width) => Number.parseFloat(width.style) !== width.offset) || state.mermaidResizeProbe.temporaryRemaining) {
+    throw new Error('Temporary Mermaid render container width or cleanup regression detected')
+  }
+}
 await wait(250)
 console.log(JSON.stringify({ action, state, events }, null, 2))
 socket.close()

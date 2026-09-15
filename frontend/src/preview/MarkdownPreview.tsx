@@ -3,7 +3,7 @@ import { native, type MarkdownFile } from '../bridge/native'
 import * as monaco from '../editor/monaco'
 import { renderMarkdown } from '../markdown/render'
 import { isSaveableLink } from './linkContext'
-import { renderMermaidBlocks } from './mermaid'
+import { startMermaidRendering } from './mermaid'
 
 async function copyText(text: string): Promise<void> {
   try {
@@ -72,12 +72,10 @@ export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine
   }, [html, onError, theme])
 
   useEffect(() => {
-    let cancelled = false
     const host = hostRef.current
     if (!host) return
-    void renderMermaidBlocks(host, theme, () => cancelled)
-    return () => { cancelled = true }
-  }, [html, theme])
+    return startMermaidRendering(host, theme)
+  }, [html, theme, zoom])
 
   useEffect(() => {
     let cancelled = false

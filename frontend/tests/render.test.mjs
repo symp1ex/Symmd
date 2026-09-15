@@ -14,14 +14,18 @@ let isSupportedDocumentName
 let resolveRegisteredLanguageID
 let isSaveableLink
 let mermaidConfiguration
+let normalizeMermaidSource
+let renderDiagram
 let renderMermaidBlocks
+let startMermaidRendering
 
 class FakeElement {
-  constructor(source) {
+  constructor(source, width = 640) {
     this.children = []
     this.dataset = source === undefined ? {} : { mermaidSource: source }
     this.innerHTML = ''
     this.isConnected = true
+    this.offsetWidth = width
     this.textContent = ''
     const classes = new Set()
     this.classList = {
@@ -55,7 +59,7 @@ before(async () => {
   ;({ classifyLogFragment, logLanguage } = await server.ssrLoadModule('/src/editor/logLanguage.ts'))
   ;({ effectiveViewMode, isSupportedDocumentName, languageForDocument, resolveRegisteredLanguageID } = await server.ssrLoadModule('/src/editor/languages.ts'))
   ;({ isSaveableLink } = await server.ssrLoadModule('/src/preview/linkContext.ts'))
-  ;({ mermaidConfiguration, renderMermaidBlocks } = await server.ssrLoadModule('/src/preview/mermaid.ts'))
+  ;({ mermaidConfiguration, normalizeMermaidSource, renderDiagram, renderMermaidBlocks, startMermaidRendering } = await server.ssrLoadModule('/src/preview/mermaid.ts'))
 })
 
 after(async () => {
@@ -82,6 +86,53 @@ test('renders Mermaid fences as escaped source-line placeholders without code co
   assert.equal((html.match(/data-copy-code/g) ?? []).length, 1)
   assert.match(html, /data-language="javascript">const safe = &quot;&lt;tag&gt;&quot;<\/code>/)
   assert.doesNotMatch(html, /<img\b/i)
+})
+
+test('normalizes only a lowercase gitgraph diagram declaration', () => {
+  const lowercase = '  gitgraph\n    commit id: "gitgraph label"\n    branch gitgraph'
+  assert.equal(normalizeMermaidSource(lowercase), '  gitGraph\n    commit id: "gitgraph label"\n    branch gitgraph')
+
+  const canonical = 'gitGraph\n    commit id: "Initial commit"'
+  assert.equal(normalizeMermaidSource(canonical), canonical)
+
+  const preamble = '---\ntitle: Git history\n---\n%%{init: { "gitGraph": { "showBranches": true } }}%%\n%% gitgraph in a comment\n\tgitgraph\n    commit id: "Initial commit"'
+  assert.equal(normalizeMermaidSource(preamble), preamble.replace('\tgitgraph\n', '\tgitGraph\n'))
+
+  for (const source of [
+    'flowchart LR\nA[gitgraph] --> B',
+    'sequenceDiagram\nA->>B: gitgraph',
+    'gantt\ntitle gitgraph',
+    'classDiagram\nclass gitgraph',
+  ]) {
+    assert.equal(normalizeMermaidSource(source), source)
+  }
+})
+
+test('passes lowercase gitgraph to Mermaid in compatible form but preserves original errors', async () => {
+  const source = 'gitgraph\n    commit id: "<img src=x onerror=alert(1)> gitgraph"'
+  const container = new FakeElement(source)
+  let renderedSource = ''
+  await renderMermaidBlocks(fakeHost(container), 'dark', () => false, async (compatibleSource) => {
+    renderedSource = compatibleSource
+    throw new Error('Parse error')
+  })
+  assert.equal(renderedSource, 'gitGraph\n    commit id: "<img src=x onerror=alert(1)> gitgraph"')
+  assert.equal(container.children[1].textContent, source)
+  assert.equal(container.innerHTML, '')
+})
+
+test('keeps lowercase and canonical git graph sources as distinct cache identities', async () => {
+  const renderedSources = []
+  const renderer = async (source) => {
+    renderedSources.push(source)
+    return { diagramType: 'gitGraph', svg: `<svg data-render="${renderedSources.length}"></svg>` }
+  }
+  await renderMermaidBlocks(fakeHost(new FakeElement('gitgraph\ncommit id: "same"')), 'dark', () => false, renderer)
+  await renderMermaidBlocks(fakeHost(new FakeElement('gitGraph\ncommit id: "same"')), 'dark', () => false, renderer)
+  assert.deepEqual(renderedSources, [
+    'gitGraph\ncommit id: "same"',
+    'gitGraph\ncommit id: "same"',
+  ])
 })
 
 test('renders multiple Mermaid placeholders independently as SVG', async () => {
@@ -148,6 +199,226 @@ test('caches unchanged Mermaid SVG by source and theme and rerenders on theme ch
   assert.equal(calls, 2)
   assert.equal(unchanged.innerHTML, '<svg data-theme="dark"></svg>')
   assert.equal(changedTheme.innerHTML, '<svg data-theme="light"></svg>')
+})
+
+test('keys Mermaid renders by measured width and reuses an unchanged width', async () => {
+  const source = 'gantt\ntitle Width cache probe'
+  const widths = []
+  const renderer = async (_source, _theme, width) => {
+    widths.push(width)
+    return { diagramType: 'gantt', svg: `<svg data-width="${width}"></svg>` }
+  }
+  await renderMermaidBlocks(fakeHost(new FakeElement(source, 480)), 'dark', () => false, renderer)
+  await renderMermaidBlocks(fakeHost(new FakeElement(source, 480)), 'dark', () => false, renderer)
+  const resized = new FakeElement(source, 860)
+  await renderMermaidBlocks(fakeHost(resized), 'dark', () => false, renderer)
+  assert.deepEqual(widths, [480, 860])
+  assert.equal(resized.innerHTML, '<svg data-width="860"></svg>')
+})
+
+test('does not apply a stale Mermaid result rendered for an old width', async () => {
+  const source = 'gantt\ntitle Stale width probe'
+  const container = new FakeElement(source, 420)
+  const resolvers = new Map()
+  const renderer = (_source, _theme, width) => new Promise((resolve) => resolvers.set(width, resolve))
+  let generation = 1
+  const first = renderMermaidBlocks(fakeHost(container), 'dark', () => generation !== 1, renderer)
+  container.offsetWidth = 820
+  generation = 2
+  const second = renderMermaidBlocks(fakeHost(container), 'dark', () => generation !== 2, renderer)
+  resolvers.get(820)({ diagramType: 'gantt', svg: '<svg data-width="820"></svg>' })
+  await second
+  resolvers.get(420)({ diagramType: 'gantt', svg: '<svg data-width="420"></svg>' })
+  await first
+  assert.equal(container.innerHTML, '<svg data-width="820"></svg>')
+})
+
+test('observes Mermaid widths without rerendering unchanged sizes and disconnects on cleanup', async () => {
+  const originalResizeObserver = globalThis.ResizeObserver
+  let notifyResize
+  let disconnected = false
+  const observed = []
+  globalThis.ResizeObserver = class {
+    constructor(callback) { notifyResize = callback }
+    observe(element) { observed.push(element) }
+    disconnect() { disconnected = true }
+  }
+
+  try {
+    const source = 'gantt\ntitle Resize lifecycle probe'
+    const container = new FakeElement(source, 500)
+    const host = fakeHost(container)
+    const widths = []
+    const stop = startMermaidRendering(host, 'dark', async (_source, _theme, width) => {
+      widths.push(width)
+      return { diagramType: 'gantt', svg: `<svg data-width="${width}"></svg>` }
+    })
+    await new Promise(setImmediate)
+    notifyResize([])
+    await new Promise(setImmediate)
+    container.offsetWidth = 900
+    notifyResize([])
+    await new Promise(setImmediate)
+    stop()
+    container.offsetWidth = 1000
+    notifyResize([])
+    await new Promise(setImmediate)
+
+    assert.deepEqual(widths, [500, 900])
+    assert.deepEqual(observed, [host, container])
+    assert.equal(container.innerHTML, '<svg data-width="900"></svg>')
+    assert.equal(disconnected, true)
+  } finally {
+    if (originalResizeObserver === undefined) delete globalThis.ResizeObserver
+    else globalThis.ResizeObserver = originalResizeObserver
+  }
+})
+
+test('rerenders Mermaid after workspace layout mutations when ResizeObserver does not notify', async () => {
+  const originalMutationObserver = globalThis.MutationObserver
+  const originalResizeObserver = globalThis.ResizeObserver
+  let notifyMutation
+  let disconnected = false
+  const layoutRoot = {}
+  globalThis.MutationObserver = class {
+    constructor(callback) { notifyMutation = callback }
+    observe(target, options) {
+      assert.equal(target, layoutRoot)
+      assert.deepEqual(options, { attributes: true, attributeFilter: ['class', 'style'], subtree: true })
+    }
+    disconnect() { disconnected = true }
+  }
+  delete globalThis.ResizeObserver
+
+  try {
+    const source = 'gantt\ntitle Workspace mutation probe'
+    const container = new FakeElement(source, 440)
+    const host = fakeHost(container)
+    host.parentElement = { parentElement: layoutRoot }
+    const widths = []
+    const stop = startMermaidRendering(host, 'dark', async (_source, _theme, width) => {
+      widths.push(width)
+      return { diagramType: 'gantt', svg: `<svg data-width="${width}"></svg>` }
+    })
+    await new Promise(setImmediate)
+    container.offsetWidth = 780
+    notifyMutation([])
+    await new Promise(setImmediate)
+    stop()
+
+    assert.deepEqual(widths, [440, 780])
+    assert.equal(container.innerHTML, '<svg data-width="780"></svg>')
+    assert.equal(disconnected, true)
+  } finally {
+    if (originalMutationObserver === undefined) delete globalThis.MutationObserver
+    else globalThis.MutationObserver = originalMutationObserver
+    if (originalResizeObserver === undefined) delete globalThis.ResizeObserver
+    else globalThis.ResizeObserver = originalResizeObserver
+  }
+})
+
+test('rerenders Mermaid on window resize and removes the listener on cleanup', async () => {
+  const originalWindow = globalThis.window
+  const originalMutationObserver = globalThis.MutationObserver
+  const originalResizeObserver = globalThis.ResizeObserver
+  let notifyResize
+  let removedListener
+  globalThis.window = {
+    addEventListener(name, callback) {
+      assert.equal(name, 'resize')
+      notifyResize = callback
+    },
+    removeEventListener(name, callback) {
+      assert.equal(name, 'resize')
+      removedListener = callback
+    },
+  }
+  delete globalThis.MutationObserver
+  delete globalThis.ResizeObserver
+
+  try {
+    const source = 'gantt\ntitle Window resize probe'
+    const container = new FakeElement(source, 460)
+    const host = fakeHost(container)
+    const widths = []
+    const stop = startMermaidRendering(host, 'dark', async (_source, _theme, width) => {
+      widths.push(width)
+      return { diagramType: 'gantt', svg: `<svg data-width="${width}"></svg>` }
+    })
+    await new Promise(setImmediate)
+    container.offsetWidth = 720
+    notifyResize()
+    await new Promise(setImmediate)
+    stop()
+
+    assert.deepEqual(widths, [460, 720])
+    assert.equal(container.innerHTML, '<svg data-width="720"></svg>')
+    assert.equal(removedListener, notifyResize)
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+    if (originalMutationObserver === undefined) delete globalThis.MutationObserver
+    else globalThis.MutationObserver = originalMutationObserver
+    if (originalResizeObserver === undefined) delete globalThis.ResizeObserver
+    else globalThis.ResizeObserver = originalResizeObserver
+  }
+})
+
+test('sizes and removes the temporary Mermaid render container after success and failure', async () => {
+  const originalDocument = globalThis.document
+  const temporaryContainers = []
+  globalThis.document = {
+    createElement: () => ({
+      dataset: {},
+      style: {},
+      remove() { this.removed = true },
+    }),
+    body: {
+      appendChild(container) { temporaryContainers.push(container) },
+    },
+  }
+
+  try {
+    const configuration = []
+    const successRenderer = {
+      initialize(config) { configuration.push(config) },
+      async render(_id, _source, container) {
+        assert.equal(container.style.width, '734px')
+        assert.equal(container.style.visibility, 'hidden')
+        assert.equal('symmdMermaidRenderHost' in container.dataset, true)
+        return { diagramType: 'gantt', svg: '<svg></svg>' }
+      },
+    }
+    await renderDiagram('gantt\ntitle Temporary host success', 'dark', 734, successRenderer)
+
+    const failureRenderer = {
+      initialize() {},
+      async render() { throw new Error('Render failed') },
+    }
+    await assert.rejects(renderDiagram('gantt\ntitle Temporary host failure', 'light', 512, failureRenderer), /Render failed/)
+
+    assert.equal(configuration[0].securityLevel, 'strict')
+    assert.equal(temporaryContainers[0].removed, true)
+    assert.equal(temporaryContainers[1].style.width, '512px')
+    assert.equal(temporaryContainers[1].removed, true)
+  } finally {
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+  }
+})
+
+test('keeps identical Mermaid occurrences independent', async () => {
+  const source = 'flowchart LR\nSame --> Source'
+  const first = new FakeElement(source, 600)
+  const second = new FakeElement(source, 600)
+  let calls = 0
+  await renderMermaidBlocks(fakeHost(first, second), 'dark', () => false, async () => {
+    calls += 1
+    return { diagramType: 'flowchart', svg: `<svg data-call="${calls}"></svg>` }
+  })
+  assert.equal(calls, 2)
+  assert.equal(first.innerHTML, '<svg data-call="1"></svg>')
+  assert.equal(second.innerHTML, '<svg data-call="2"></svg>')
 })
 
 test('uses strict Mermaid security configuration for both preview themes', () => {
