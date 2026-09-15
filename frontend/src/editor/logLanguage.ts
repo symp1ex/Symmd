@@ -26,6 +26,7 @@ export const logTokenRules: readonly LogTokenRule[] = [
 
 export const logLanguage: languages.IMonarchLanguage = {
   defaultToken: '',
+  ignoreCase: true,
   tokenizer: {
     root: logTokenRules.map(({ pattern, token }) => [pattern, token]),
   },

@@ -7,6 +7,7 @@ let server
 let renderMarkdown
 let nextPreviewZoom
 let classifyLogFragment
+let logLanguage
 let effectiveViewMode
 let languageForDocument
 let isSupportedDocumentName
@@ -22,7 +23,7 @@ before(async () => {
   })
   ;({ renderMarkdown } = await server.ssrLoadModule('/src/markdown/render.ts'))
   ;({ nextPreviewZoom } = await server.ssrLoadModule('/src/preview/zoom.ts'))
-  ;({ classifyLogFragment } = await server.ssrLoadModule('/src/editor/logLanguage.ts'))
+  ;({ classifyLogFragment, logLanguage } = await server.ssrLoadModule('/src/editor/logLanguage.ts'))
   ;({ effectiveViewMode, isSupportedDocumentName, languageForDocument, resolveRegisteredLanguageID } = await server.ssrLoadModule('/src/editor/languages.ts'))
 })
 
@@ -137,6 +138,7 @@ test('resolves representative Monaco language ids and aliases', () => {
 })
 
 test('classifies VS Code-style log tokens', () => {
+  assert.equal(logLanguage.ignoreCase, true)
   assert.equal(classifyLogFragment('[INFO]'), 'markup.inserted.log.info')
   assert.equal(classifyLogFragment('[WARN]'), 'markup.deleted.log.warning')
   assert.equal(classifyLogFragment('[ERROR]'), 'string.regexp.log.error')

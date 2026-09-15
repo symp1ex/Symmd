@@ -62,10 +62,12 @@ export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine
       if (!language) continue
       void monaco.editor.colorize(original, language, { tabSize: 4 }).then((highlighted) => {
         if (!cancelled && code.isConnected) code.innerHTML = highlighted
-      }).catch(() => undefined)
+      }).catch((error: unknown) => {
+        if (!cancelled) onError(`Could not highlight ${language}: ${error instanceof Error ? error.message : String(error)}`)
+      })
     }
     return () => { cancelled = true }
-  }, [html, theme])
+  }, [html, onError, theme])
 
   useEffect(() => {
     let cancelled = false
