@@ -43,7 +43,7 @@ func Load() (Frontend, error) {
 	if err != nil {
 		return Frontend{}, fmt.Errorf("locate user cache: %w", err)
 	}
-	return extractTo(filepath.Join(cache, "symmd", "frontend"))
+	return extractTo(filepath.Join(cache, "symmd", "cache", "frontend"))
 }
 
 func extractTo(root string) (Frontend, error) {

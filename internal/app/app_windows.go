@@ -111,7 +111,7 @@ func (a *Application) Run() error {
 	window.EnableDPIAwareness()
 	dataPath := ""
 	if configPath, err := settings.Path(); err == nil {
-		dataPath = filepath.Join(filepath.Dir(configPath), "webview")
+		dataPath = filepath.Join(filepath.Dir(configPath), "cache", "webview")
 		if err := os.MkdirAll(dataPath, 0o755); err != nil {
 			return fmt.Errorf("create WebView2 data directory: %w", err)
 		}
