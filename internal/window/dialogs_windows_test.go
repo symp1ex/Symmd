@@ -49,6 +49,16 @@ func TestMarkdownDialogFilterUsesEmbeddedAndDoubleTrailingNUL(t *testing.T) {
 	}
 }
 
+func TestAllFilesDialogFilterUsesDoubleTrailingNUL(t *testing.T) {
+	filter := allFilesDialogFilter()
+	if len(filter) < 2 || filter[len(filter)-1] != 0 || filter[len(filter)-2] != 0 {
+		t.Fatalf("filter is not double-NUL terminated: %v", filter)
+	}
+	if decoded := string(utf16.Decode(filter[:len(filter)-2])); decoded != "All files (*.*)\x00*.*" {
+		t.Fatalf("filter = %q", decoded)
+	}
+}
+
 func TestEnsureMarkdownExtension(t *testing.T) {
 	tests := map[string]string{
 		`C:\notes\draft`:          `C:\notes\draft.md`,

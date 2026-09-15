@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -72,6 +73,15 @@ func saveMarkdownFile(owner uintptr, suggestedPath string, logf DialogLogFunc) (
 }
 
 func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string, logf DialogLogFunc) (string, bool, error) {
+	return fileDialog(owner, save, suggestedPath, titleText, markdownDialogFilter(), "md", save, logf)
+}
+
+func SaveLinkFile(owner uintptr, suggestedPath string, logf DialogLogFunc) (string, bool, error) {
+	extension := strings.TrimPrefix(filepath.Ext(suggestedPath), ".")
+	return fileDialog(owner, true, suggestedPath, "Save link as", allFilesDialogFilter(), extension, false, logf)
+}
+
+func fileDialog(owner uintptr, save bool, suggestedPath, titleText string, filter []uint16, defaultExtension string, ensureMarkdown bool, logf DialogLogFunc) (string, bool, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	buffer := make([]uint16, 32768)
@@ -81,9 +91,8 @@ func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string, l
 			copy(buffer, encoded)
 		}
 	}
-	filter := markdownDialogFilter()
 	title, _ := syscall.UTF16PtrFromString(titleText)
-	ext, _ := syscall.UTF16PtrFromString("md")
+	ext, _ := syscall.UTF16PtrFromString(defaultExtension)
 	flags := uint32(ofnExplorer | ofnPathMustExist | ofnHideReadOnly | ofnDontAddToRecent)
 	proc := getOpenFileNameW
 	procName := "GetOpenFileNameW"
@@ -119,7 +128,7 @@ func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string, l
 		return "", false, fmt.Errorf("Windows file dialog failed: 0x%x", code)
 	}
 	path := syscall.UTF16ToString(buffer)
-	if save {
+	if ensureMarkdown {
 		path = ensureMarkdownExtension(path)
 	}
 	return path, false, nil
@@ -127,6 +136,11 @@ func markdownDialog(owner uintptr, save bool, suggestedPath, titleText string, l
 
 func markdownDialogFilter() []uint16 {
 	filter := utf16.Encode([]rune("Supported documents (*.md;*.markdown;*.log)\x00*.md;*.markdown;*.log\x00All files (*.*)\x00*.*\x00"))
+	return append(filter, 0)
+}
+
+func allFilesDialogFilter() []uint16 {
+	filter := utf16.Encode([]rune("All files (*.*)\x00*.*\x00"))
 	return append(filter, 0)
 }
 

@@ -12,6 +12,7 @@ let effectiveViewMode
 let languageForDocument
 let isSupportedDocumentName
 let resolveRegisteredLanguageID
+let isSaveableLink
 
 before(async () => {
   server = await createServer({
@@ -25,6 +26,7 @@ before(async () => {
   ;({ nextPreviewZoom } = await server.ssrLoadModule('/src/preview/zoom.ts'))
   ;({ classifyLogFragment, logLanguage } = await server.ssrLoadModule('/src/editor/logLanguage.ts'))
   ;({ effectiveViewMode, isSupportedDocumentName, languageForDocument, resolveRegisteredLanguageID } = await server.ssrLoadModule('/src/editor/languages.ts'))
+  ;({ isSaveableLink } = await server.ssrLoadModule('/src/preview/linkContext.ts'))
 })
 
 after(async () => {
@@ -41,6 +43,16 @@ test('renders known and unknown fenced languages with copy controls and source l
   assert.match(html, /data-language="ini">enabled=true<\/code>/)
   assert.match(html, /data-language="some-unknown-language">hello<\/code>/)
   assert.equal((html.match(/data-copy-code/g) ?? []).length, 6)
+})
+
+test('offers Save link as only for link types supported by existing navigation', () => {
+  assert.equal(isSaveableLink('C:\\notes\\README.md', 'https://example.com/file.md'), true)
+  assert.equal(isSaveableLink('C:\\notes\\README.md', '../shared/file.md#section'), true)
+  assert.equal(isSaveableLink('', '../shared/file.md'), false)
+  assert.equal(isSaveableLink('C:\\notes\\README.md', '#section'), false)
+  assert.equal(isSaveableLink('C:\\notes\\README.md', 'mailto:user@example.com'), false)
+  assert.equal(isSaveableLink('C:\\notes\\README.md', 'file:///C:/notes/file.md'), false)
+  assert.equal(isSaveableLink('C:\\notes\\README.md', '/absolute/file.md'), false)
 })
 
 test('allows safe details HTML and parses a fenced block inside it', () => {

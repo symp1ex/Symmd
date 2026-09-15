@@ -3,6 +3,7 @@
 /.cache/
 .gocache-vet/
 .gocache/
+.codex-gocache/
 AGENTS.md
 rules/
 /frontend/node_modules/

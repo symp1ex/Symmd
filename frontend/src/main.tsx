@@ -7,6 +7,7 @@ import './styles/preview.css'
 const bridgeMethods = [
   'ReportRuntimeEvent', 'GetInitialFile', 'OpenFile', 'ReadFile', 'SaveFile', 'SaveFileAs',
   'CheckFile', 'ResolveResource', 'OpenLink', 'ConfirmDiscard', 'ConfirmReload',
+  'SaveLinkAs', 'ShowContextMenu',
   'GetPreferences', 'SavePreferences', 'SetDirty', 'WindowMinimize',
   'WindowToggleMaximize', 'WindowClose', 'WindowDrag', 'WindowResize', 'CloseAfterSave',
 ] as const

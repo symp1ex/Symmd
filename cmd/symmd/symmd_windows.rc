@@ -1,3 +1,7 @@
 #define IDI_SYMMD 1
+#define IDI_SYMMD_MARKDOWN 2
+#define IDI_SYMMD_LOG 3
 
 IDI_SYMMD ICON "../../favicon.ico"
+IDI_SYMMD_MARKDOWN ICON "../../internal/webassets/src/md.ico"
+IDI_SYMMD_LOG ICON "../../internal/webassets/src/log.ico"

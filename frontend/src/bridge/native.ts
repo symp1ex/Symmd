@@ -6,6 +6,14 @@ export interface MarkdownFile {
 }
 
 export interface FileState { exists: boolean; modifiedNs: number }
+export interface ContextMenuOptions {
+  editable: boolean
+  hasSelection: boolean
+  canSelectAll: boolean
+  link: boolean
+  canSaveLink: boolean
+}
+export type ContextMenuCommand = '' | 'cut' | 'copy' | 'paste' | 'selectAll' | 'saveLink' | 'copyLink'
 export interface Preferences {
   theme: 'dark' | 'light'
   fontSize: number
@@ -33,6 +41,8 @@ declare global {
     CheckFile(path: string): Promise<FileState>
     ResolveResource(documentPath: string, reference: string): Promise<string>
     OpenLink(documentPath: string, reference: string): Promise<MarkdownFile | null>
+    SaveLinkAs(documentPath: string, reference: string): Promise<void>
+    ShowContextMenu(options: ContextMenuOptions): Promise<ContextMenuCommand>
     ConfirmDiscard(name: string): Promise<boolean>
     ConfirmReload(name: string): Promise<boolean>
     GetPreferences(): Promise<Preferences>
@@ -57,6 +67,8 @@ export const native = {
   checkFile: (path: string) => window.CheckFile(path),
   resolveResource: (documentPath: string, reference: string) => window.ResolveResource(documentPath, reference),
   openLink: (documentPath: string, reference: string) => window.OpenLink(documentPath, reference),
+  saveLinkAs: (documentPath: string, reference: string) => window.SaveLinkAs(documentPath, reference),
+  showContextMenu: (options: ContextMenuOptions) => window.ShowContextMenu(options),
   confirmDiscard: (name: string) => window.ConfirmDiscard(name),
   confirmReload: (name: string) => window.ConfirmReload(name),
   getPreferences: () => window.GetPreferences(),

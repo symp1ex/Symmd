@@ -87,8 +87,9 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
   onScrollLineRef.current = onScrollLine
 
   useEffect(() => {
-    if (!hostRef.current) return
-    const editor = monaco.editor.create(hostRef.current, {
+    const host = hostRef.current
+    if (!host) return
+    const editor = monaco.editor.create(host, {
       value,
       language,
       theme: monaco.editorTheme(theme),
@@ -102,6 +103,7 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
       scrollBeyondLastLine: false,
       fontSize,
       renderWhitespace: 'selection',
+      contextmenu: false,
       padding: { top: 12 },
     })
     editorRef.current = editor
@@ -112,7 +114,26 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
     const scrollSubscription = editor.onDidScrollChange((event) => {
       if (event.scrollTopChanged) onScrollLineRef.current(editor.getVisibleRanges()[0]?.startLineNumber ?? 1)
     })
+    const showContextMenu = (event: MouseEvent) => {
+      event.preventDefault()
+      const selection = editor.getSelection()
+      const hasSelection = Boolean(selection && !selection.isEmpty())
+      void native.showContextMenu({ editable: true, hasSelection, canSelectAll: Boolean(editor.getModel()?.getValueLength()), link: false, canSaveLink: false })
+        .then((command) => {
+          let action: string | undefined
+          if (command === 'cut') action = 'editor.action.clipboardCutAction'
+          else if (command === 'copy') action = 'editor.action.clipboardCopyAction'
+          else if (command === 'paste') action = 'editor.action.clipboardPasteAction'
+          else if (command === 'selectAll') action = 'editor.action.selectAll'
+          if (!action) return
+          editor.focus()
+          void editor.getAction(action)?.run()
+        })
+        .catch((error: unknown) => native.reportRuntimeEvent('context-menu-error', error instanceof Error ? error.message : String(error)))
+    }
+    host.addEventListener('contextmenu', showContextMenu, true)
     return () => {
+      host.removeEventListener('contextmenu', showContextMenu, true)
       contentSubscription.dispose()
       scrollSubscription.dispose()
       editor.dispose()

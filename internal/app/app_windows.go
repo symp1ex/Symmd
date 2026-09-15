@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,14 +26,16 @@ import (
 )
 
 const (
-	defaultWidth       = 1100
-	defaultHeight      = 760
-	messageYesNoCancel = 0x00000003
-	messageYesNo       = 0x00000004
-	messageIconWarning = 0x00000030
-	applicationIconID  = 1
-	idYes              = 6
-	idNo               = 7
+	defaultWidth            = 1100
+	defaultHeight           = 760
+	messageYesNoCancel      = 0x00000003
+	messageYesNo            = 0x00000004
+	messageIconWarning      = 0x00000030
+	applicationIconID       = 1
+	idYes                   = 6
+	idNo                    = 7
+	moveFileReplaceExisting = 0x00000001
+	moveFileWriteThrough    = 0x00000008
 )
 
 var (
@@ -40,6 +44,8 @@ var (
 	getWindowRect = user32.NewProc("GetWindowRect")
 	shell32       = syscall.NewLazyDLL("shell32.dll")
 	shellExecuteW = shell32.NewProc("ShellExecuteW")
+	kernel32      = syscall.NewLazyDLL("kernel32.dll")
+	moveFileExW   = kernel32.NewProc("MoveFileExW")
 )
 
 type nativeRect struct{ Left, Top, Right, Bottom int32 }
@@ -69,6 +75,11 @@ func (a *Application) Run() error {
 		defer logFile.Close()
 	}
 	a.logf("application starting: frontend_url=%s assets_dir=%s version=%s files=%d bytes=%d initial_file=%t log=%s", a.frontend.URL, a.frontend.Directory, a.frontend.Version, a.frontend.FileCount, a.frontend.TotalBytes, a.initial != nil, logPath)
+	if changed, err := registerFileAssociations(); err != nil {
+		a.logf("file association registration failed: %v", err)
+	} else if changed {
+		a.logf("file association registration updated")
+	}
 	window.EnableDPIAwareness()
 	config, _ := settings.Load()
 	width, height := config.Window.Width, config.Window.Height
@@ -147,6 +158,10 @@ func (a *Application) bind() error {
 		{"CheckFile", files.State},
 		{"ResolveResource", files.ResourceDataURL},
 		{"OpenLink", a.openLink},
+		{"SaveLinkAs", a.saveLinkAs},
+		{"ShowContextMenu", func(options window.ContextMenuOptions) (string, error) {
+			return window.ShowContextMenu(a.hwnd, options)
+		}},
 		{"ConfirmDiscard", a.confirmDiscard},
 		{"ConfirmReload", a.confirmReload},
 		{"GetPreferences", a.getPreferences},
@@ -381,31 +396,16 @@ func (a *Application) message(text, title string, flags uintptr) uintptr {
 }
 
 func (a *Application) openLink(documentPath, reference string) (*files.MarkdownFile, error) {
-	parsed, err := url.Parse(reference)
+	parsed, target, err := resolveLinkTarget(documentPath, reference)
 	if err != nil {
-		return nil, fmt.Errorf("parse link: %w", err)
+		return nil, err
 	}
-	if parsed.Fragment != "" && parsed.Path == "" {
+	if target == "" {
 		return nil, nil
 	}
 	if parsed.Scheme != "" {
-		scheme := strings.ToLower(parsed.Scheme)
-		if scheme != "https" && scheme != "http" && scheme != "mailto" {
-			return nil, errors.New("link scheme is blocked")
-		}
-		return nil, a.openShell(reference)
+		return nil, a.openShell(target)
 	}
-	if documentPath == "" {
-		return nil, errors.New("save the document before opening relative links")
-	}
-	if strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "\\") {
-		return nil, errors.New("absolute local links are blocked")
-	}
-	decoded, err := url.PathUnescape(parsed.Path)
-	if err != nil {
-		return nil, fmt.Errorf("decode link path: %w", err)
-	}
-	target := filepath.Join(filepath.Dir(documentPath), filepath.FromSlash(decoded))
 	if !files.IsSupportedDocument(target) {
 		info, err := os.Stat(target)
 		if err != nil {
@@ -421,6 +421,151 @@ func (a *Application) openLink(documentPath, reference string) (*files.MarkdownF
 		return nil, err
 	}
 	return &file, nil
+}
+
+func resolveLinkTarget(documentPath, reference string) (*url.URL, string, error) {
+	parsed, err := url.Parse(reference)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse link: %w", err)
+	}
+	if parsed.Fragment != "" && parsed.Path == "" {
+		return parsed, "", nil
+	}
+	if parsed.Scheme != "" {
+		scheme := strings.ToLower(parsed.Scheme)
+		if scheme != "https" && scheme != "http" && scheme != "mailto" {
+			return nil, "", errors.New("link scheme is blocked")
+		}
+		return parsed, reference, nil
+	}
+	if documentPath == "" {
+		return nil, "", errors.New("save the document before opening relative links")
+	}
+	if strings.HasPrefix(parsed.Path, "/") || strings.HasPrefix(parsed.Path, "\\") {
+		return nil, "", errors.New("absolute local links are blocked")
+	}
+	decoded, err := url.PathUnescape(parsed.Path)
+	if err != nil {
+		return nil, "", fmt.Errorf("decode link path: %w", err)
+	}
+	target := filepath.Join(filepath.Dir(documentPath), filepath.FromSlash(decoded))
+	return parsed, target, nil
+}
+
+func (a *Application) saveLinkAs(documentPath, reference string) error {
+	parsed, target, err := resolveLinkTarget(documentPath, reference)
+	if err != nil {
+		return err
+	}
+	if target == "" || strings.EqualFold(parsed.Scheme, "mailto") {
+		return errors.New("this link cannot be saved")
+	}
+	if parsed.Scheme == "" {
+		info, err := os.Stat(target)
+		if err != nil {
+			return fmt.Errorf("save relative link: %w", err)
+		}
+		if info.IsDir() {
+			return errors.New("relative link points to a directory")
+		}
+	}
+	destination, cancelled, err := window.SaveLinkFile(a.hwnd, linkFileName(parsed, target), a.logf)
+	if err != nil || cancelled {
+		return err
+	}
+	return saveLinkTarget(parsed, target, destination)
+}
+
+func linkFileName(parsed *url.URL, target string) string {
+	name := filepath.Base(target)
+	if parsed.Scheme != "" {
+		name = pathpkg.Base(parsed.Path)
+	}
+	if name == "." || name == "/" || name == `\` {
+		return "download"
+	}
+	name = strings.Map(func(character rune) rune {
+		if strings.ContainsRune(`<>:"/\|?*`, character) || character < 32 {
+			return '_'
+		}
+		return character
+	}, name)
+	name = strings.TrimRight(name, ". ")
+	if name == "" || name == "." {
+		return "download"
+	}
+	return name
+}
+
+func saveLinkTarget(parsed *url.URL, target, destination string) error {
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".symmd-link-*")
+	if err != nil {
+		return fmt.Errorf("create temporary link file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		os.Remove(temporaryPath)
+		return fmt.Errorf("close temporary link file: %w", err)
+	}
+	defer os.Remove(temporaryPath)
+
+	if parsed.Scheme != "" {
+		response, err := http.DefaultClient.Get(target)
+		if err != nil {
+			return fmt.Errorf("download link: %w", err)
+		}
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+			response.Body.Close()
+			return fmt.Errorf("download link: HTTP status %s", response.Status)
+		}
+		output, err := os.OpenFile(temporaryPath, os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			response.Body.Close()
+			return fmt.Errorf("open temporary link file: %w", err)
+		}
+		_, copyErr := io.Copy(output, response.Body)
+		closeOutputErr := output.Close()
+		closeResponseErr := response.Body.Close()
+		if copyErr != nil {
+			return fmt.Errorf("download link: %w", copyErr)
+		}
+		if closeOutputErr != nil {
+			return fmt.Errorf("close downloaded link: %w", closeOutputErr)
+		}
+		if closeResponseErr != nil {
+			return fmt.Errorf("close link response: %w", closeResponseErr)
+		}
+	} else {
+		source, err := os.Open(target)
+		if err != nil {
+			return fmt.Errorf("open linked file: %w", err)
+		}
+		output, err := os.OpenFile(temporaryPath, os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			source.Close()
+			return fmt.Errorf("open temporary link file: %w", err)
+		}
+		_, copyErr := io.Copy(output, source)
+		closeOutputErr := output.Close()
+		closeSourceErr := source.Close()
+		if copyErr != nil {
+			return fmt.Errorf("copy linked file: %w", copyErr)
+		}
+		if closeOutputErr != nil {
+			return fmt.Errorf("close saved link: %w", closeOutputErr)
+		}
+		if closeSourceErr != nil {
+			return fmt.Errorf("close linked file: %w", closeSourceErr)
+		}
+	}
+
+	encodedTemporary, _ := syscall.UTF16PtrFromString(temporaryPath)
+	encodedDestination, _ := syscall.UTF16PtrFromString(destination)
+	result, _, callErr := moveFileExW.Call(uintptr(unsafe.Pointer(encodedTemporary)), uintptr(unsafe.Pointer(encodedDestination)), moveFileReplaceExisting|moveFileWriteThrough)
+	if result == 0 {
+		return fmt.Errorf("replace saved link: %w", callErr)
+	}
+	return nil
 }
 
 func (a *Application) openShell(target string) error {

@@ -84,10 +84,12 @@ async function snapshot() {
     resources: performance.getEntriesByType('resource').map((entry) => entry.name),
     bridgeMissing: ${JSON.stringify([
       'ReportRuntimeEvent', 'GetInitialFile', 'OpenFile', 'ReadFile', 'SaveFile', 'SaveFileAs',
-      'CheckFile', 'ResolveResource', 'OpenLink', 'ConfirmDiscard', 'ConfirmReload',
+      'CheckFile', 'ResolveResource', 'OpenLink', 'SaveLinkAs', 'ShowContextMenu', 'ConfirmDiscard', 'ConfirmReload',
       'GetPreferences', 'SavePreferences', 'SetDirty', 'WindowMinimize',
       'WindowToggleMaximize', 'WindowClose', 'WindowDrag', 'WindowResize', 'CloseAfterSave',
-    ])}.filter((name) => typeof window[name] !== 'function')
+    ])}.filter((name) => typeof window[name] !== 'function'),
+    contextMenuProbe: window.__symmdContextMenuProbe,
+    editorContextMenuActions: window.__symmdEditorContextMenuActions,
   }))()`)
 }
 
@@ -174,6 +176,53 @@ if (action === 'snapshot') {
     worker.addEventListener('error', () => { failed = true })
     setTimeout(() => { worker.terminate(); resolve({ created: true, failed }) }, 750)
   })`)
+} else if (action === 'context-menu-probe') {
+  await evaluate(`new Promise((resolve) => {
+    const original = window.ShowContextMenu
+    const calls = []
+    window.ShowContextMenu = async (options) => { calls.push(options); return '' }
+    document.querySelector('.editor-host')?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    const link = document.createElement('a')
+    link.href = '../shared/file.md'
+    link.textContent = 'relative link'
+    document.querySelector('.markdown-preview__content')?.appendChild(link)
+    link.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    setTimeout(() => {
+      window.ShowContextMenu = original
+      link.remove()
+      window.__symmdContextMenuProbe = calls
+      resolve()
+    }, 100)
+  })`)
+} else if (action === 'editor-context-menu-actions') {
+  await wait(1000)
+  await evaluate(`document.querySelector('.monaco-editor textarea.inputarea')?.focus()`)
+  await evaluate(`new Promise(async (resolve, reject) => {
+    const originalShow = window.ShowContextMenu
+    const host = document.querySelector('.editor-host')
+    const run = async (command) => {
+      window.ShowContextMenu = async () => command
+      host.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+      await new Promise((done) => setTimeout(done, 100))
+    }
+    try {
+      const originalText = document.querySelector('.view-lines')?.textContent ?? ''
+      await run('selectAll')
+      await run('copy')
+      const copyPreservedContent = document.querySelector('.view-lines')?.textContent === originalText
+      await run('cut')
+      const cutCleared = !document.querySelector('.view-lines')?.textContent
+      await run('paste')
+      const pasteRestoredContent = document.querySelector('.view-lines')?.textContent === originalText
+      window.__symmdEditorContextMenuActions = { copyPreservedContent, cutCleared, pasteRestoredContent }
+      resolve()
+    } catch (error) {
+      reject(error)
+    } finally {
+      window.ShowContextMenu = originalShow
+    }
+  })`)
+  await wait(300)
 } else if (action === 'click-open') {
   await evaluate(`[...document.querySelectorAll('button')].find((button) => button.textContent === 'Open')?.click()`)
 } else if (action === 'click-save') {

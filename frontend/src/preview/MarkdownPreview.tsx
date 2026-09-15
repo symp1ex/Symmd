@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { native, type MarkdownFile } from '../bridge/native'
 import * as monaco from '../editor/monaco'
 import { renderMarkdown } from '../markdown/render'
+import { isSaveableLink } from './linkContext'
 
 async function copyText(text: string): Promise<void> {
   try {
@@ -113,6 +114,38 @@ export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine
         let current = blocks[0]
         for (const block of blocks) { if (block.getBoundingClientRect().top <= top) current = block; else break }
         if (current) onSourceLine(Number(current.dataset.sourceLine) || 1)
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        if (!(event.target instanceof Element)) return
+        const root = event.currentTarget
+        const anchor = event.target.closest<HTMLAnchorElement>('a[href]')
+        const reference = anchor?.getAttribute('href') ?? ''
+        const selection = document.getSelection()
+        const selectedText = selection?.toString() ?? ''
+        const selectionInPreview = Boolean(selection && !selection.isCollapsed && selection.rangeCount && root.contains(selection.getRangeAt(0).commonAncestorContainer))
+        void native.showContextMenu({
+          editable: false,
+          hasSelection: selectionInPreview,
+          canSelectAll: Boolean(root.textContent),
+          link: Boolean(anchor),
+          canSaveLink: Boolean(anchor && isSaveableLink(documentPath, reference)),
+        }).then((command) => {
+          if (command === 'copy' && selectionInPreview) {
+            return copyText(selectedText)
+          }
+          if (command === 'selectAll') {
+            const range = document.createRange()
+            range.selectNodeContents(root)
+            const currentSelection = document.getSelection()
+            currentSelection?.removeAllRanges()
+            currentSelection?.addRange(range)
+          } else if (command === 'copyLink' && anchor) {
+            return copyText(reference)
+          } else if (command === 'saveLink' && anchor) {
+            return native.saveLinkAs(documentPath, reference)
+          }
+        }).catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
       }}
       onClick={(event) => {
         if (!(event.target instanceof Element)) return
