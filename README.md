@@ -4,6 +4,8 @@
 React, Vite, TypeScript, Monaco Editor, and markdown-it. It does not use
 Electron and the production frontend is embedded in one `symmd.exe`.
 
+The project started with the idea: "I wish I could take VSCode's code editor with its syntax highlighting and support for Markdown files, and its preview feature, and create a separate, lightweight application based on that." And that's exactly what I did.
+
 ## What works
 
 - Native Open and Save As dialogs; new, save, multiple tabs, dirty indicators,
