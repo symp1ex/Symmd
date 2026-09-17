@@ -53,6 +53,7 @@ await send('Network.enable')
 async function snapshot() {
   return evaluate(`(async () => ({
     url: location.href,
+    origin: location.origin,
     title: document.title,
     readyState: document.readyState,
     rootChildren: document.querySelector('#root')?.childElementCount ?? -1,

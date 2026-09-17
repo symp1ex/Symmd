@@ -1,20 +1,22 @@
 package webassets
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
-	"os"
+	"mime"
+	"net/url"
 	"path"
-	"path/filepath"
 	"strings"
+
+	webview "github.com/symp1ex/go-webview2"
 )
 
 const (
-	// Host is deliberately not a real network host. WebView2 maps it directly
-	// to the extracted, trusted application bundle.
+	// Host is deliberately not a real network host. Requests for this origin
+	// are served directly from the trusted application bundle embedded below.
 	Host = "app.symmd.local"
 	URL  = "https://" + Host + "/index.html"
 )
@@ -24,58 +26,56 @@ var files embed.FS
 
 type Frontend struct {
 	URL        string
-	Directory  string
 	Version    string
 	FileCount  int
 	TotalBytes int64
 }
 
-type embeddedAsset struct {
-	name string
-	data []byte
-}
-
-// Load extracts the trusted embedded application bundle into a versioned user
-// cache directory. WebView2 NavigateToString has a 2 MiB limit, which Monaco
-// exceeds, so the caller exposes this directory through virtual host mapping.
+// Load validates the trusted embedded application bundle and returns its
+// diagnostic metadata. It does not materialize the bundle on the filesystem.
 func Load() (Frontend, error) {
-	cache, err := os.UserConfigDir()
-	if err != nil {
-		return Frontend{}, fmt.Errorf("locate user cache: %w", err)
-	}
-	return extractTo(filepath.Join(cache, "symmd", "cache", "frontend"))
-}
-
-func extractTo(root string) (Frontend, error) {
-	assets, version, totalBytes, err := readEmbeddedAssets()
+	version, fileCount, totalBytes, err := embeddedMetadata()
 	if err != nil {
 		return Frontend{}, err
 	}
-	targetRoot := filepath.Join(root, version)
-	for _, asset := range assets {
-		relative := strings.TrimPrefix(path.Clean(asset.name), "dist/")
-		if relative == "." || relative == "dist" || strings.HasPrefix(relative, "../") {
-			return Frontend{}, fmt.Errorf("invalid embedded asset path %q", asset.name)
-		}
-		target := filepath.Join(targetRoot, filepath.FromSlash(relative))
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return Frontend{}, fmt.Errorf("create frontend asset directory: %w", err)
-		}
-		// Rewrite even an existing version directory. This makes a modified or
-		// partially-written cache self-healing on the next launch.
-		if err := os.WriteFile(target, asset.data, 0o600); err != nil {
-			return Frontend{}, fmt.Errorf("extract frontend asset %q: %w", relative, err)
-		}
-	}
-	if err := verifyExtracted(targetRoot, assets); err != nil {
-		return Frontend{}, err
-	}
-	return Frontend{URL: URL, Directory: targetRoot, Version: version, FileCount: len(assets), TotalBytes: totalBytes}, nil
+	return Frontend{URL: URL, Version: version, FileCount: fileCount, TotalBytes: totalBytes}, nil
 }
 
-func readEmbeddedAssets() ([]embeddedAsset, string, int64, error) {
+// HandleWebResource serves requests for the trusted frontend origin directly
+// from the executable. Requests for every other origin remain unhandled.
+func (Frontend) HandleWebResource(request webview.WebResourceRequest) (*webview.WebResourceResponse, error) {
+	requestURL, err := url.Parse(request.URI)
+	if err != nil || requestURL.Scheme != "https" || requestURL.Host != Host || requestURL.User != nil || requestURL.Opaque != "" {
+		return nil, nil
+	}
+
+	embeddedPath, valid := resourcePath(requestURL.Path)
+	if !valid {
+		return errorResponse(404, "Not Found"), nil
+	}
+	info, err := fs.Stat(files, embeddedPath)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && info.IsDir() {
+		return errorResponse(404, "Not Found"), nil
+	}
+	if err != nil {
+		return errorResponse(500, "Internal Server Error"), nil
+	}
+	content, err := files.ReadFile(embeddedPath)
+	if err != nil {
+		return errorResponse(500, "Internal Server Error"), nil
+	}
+
+	return &webview.WebResourceResponse{
+		Content:      content,
+		StatusCode:   200,
+		ReasonPhrase: "OK",
+		Headers:      responseHeaders(contentType(embeddedPath)),
+	}, nil
+}
+
+func embeddedMetadata() (string, int, int64, error) {
 	hash := sha256.New()
-	assets := make([]embeddedAsset, 0, 3)
+	fileCount := 0
 	var totalBytes int64
 	err := fs.WalkDir(files, "dist", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -90,29 +90,51 @@ func readEmbeddedAssets() ([]embeddedAsset, string, int64, error) {
 		}
 		_, _ = hash.Write([]byte(name))
 		_, _ = hash.Write(data)
-		assets = append(assets, embeddedAsset{name: name, data: data})
+		fileCount++
 		totalBytes += int64(len(data))
 		return nil
 	})
 	if err != nil {
-		return nil, "", 0, fmt.Errorf("read embedded frontend: %w", err)
+		return "", 0, 0, fmt.Errorf("read embedded frontend: %w", err)
 	}
-	if len(assets) == 0 {
-		return nil, "", 0, fmt.Errorf("embedded frontend is empty")
+	if fileCount == 0 {
+		return "", 0, 0, fmt.Errorf("embedded frontend is empty")
 	}
-	return assets, fmt.Sprintf("%x", hash.Sum(nil)[:8]), totalBytes, nil
+	return fmt.Sprintf("%x", hash.Sum(nil)[:8]), fileCount, totalBytes, nil
 }
 
-func verifyExtracted(root string, assets []embeddedAsset) error {
-	for _, asset := range assets {
-		relative := strings.TrimPrefix(path.Clean(asset.name), "dist/")
-		actual, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
-		if err != nil {
-			return fmt.Errorf("verify extracted frontend asset %q: %w", relative, err)
-		}
-		if !bytes.Equal(actual, asset.data) {
-			return fmt.Errorf("verify extracted frontend asset %q: content mismatch", relative)
-		}
+func resourcePath(urlPath string) (string, bool) {
+	if urlPath == "" || urlPath == "/" {
+		return "dist/index.html", true
 	}
-	return nil
+	if !strings.HasPrefix(urlPath, "/") {
+		return "", false
+	}
+	relative := strings.TrimPrefix(urlPath, "/")
+	if strings.ContainsRune(relative, '\\') || !fs.ValidPath(relative) {
+		return "", false
+	}
+	return "dist/" + relative, true
+}
+
+func contentType(name string) string {
+	if value := mime.TypeByExtension(strings.ToLower(path.Ext(name))); value != "" {
+		return value
+	}
+	return "application/octet-stream"
+}
+
+func errorResponse(statusCode int, reasonPhrase string) *webview.WebResourceResponse {
+	return &webview.WebResourceResponse{
+		Content:      []byte(reasonPhrase + "\n"),
+		StatusCode:   statusCode,
+		ReasonPhrase: reasonPhrase,
+		Headers:      responseHeaders("text/plain; charset=utf-8"),
+	}
+}
+
+func responseHeaders(contentType string) string {
+	return "Content-Type: " + contentType + "\r\n" +
+		"X-Content-Type-Options: nosniff\r\n" +
+		"Cache-Control: no-store"
 }

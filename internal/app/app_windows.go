@@ -101,7 +101,7 @@ func (a *Application) Run() error {
 	if settingsErr != nil {
 		a.logger.Warnf("settings load failed; using defaults: %v", settingsErr)
 	}
-	a.logger.Infof("application starting: frontend_url=%s assets_dir=%s version=%s files=%d bytes=%d initial_file=%t log=%s", a.frontend.URL, a.frontend.Directory, a.frontend.Version, a.frontend.FileCount, a.frontend.TotalBytes, a.initial != nil, filepath.Join(logger.Directory(), "symmd.log"))
+	a.logger.Infof("application starting: frontend_url=%s version=%s files=%d bytes=%d initial_file=%t log=%s", a.frontend.URL, a.frontend.Version, a.frontend.FileCount, a.frontend.TotalBytes, a.initial != nil, filepath.Join(logger.Directory(), "symmd.log"))
 	if changed, err := registerFileAssociations(); err != nil {
 		a.logger.Errorf("file association registration failed: %v", err)
 	} else if changed {
@@ -130,6 +130,11 @@ func (a *Application) Run() error {
 		w.Destroy()
 		return errors.New("WebView2 window did not provide an HWND")
 	}
+	w.SetWebResourceRequestedHandler(a.frontend.HandleWebResource)
+	if err := w.AddWebResourceRequestedFilter("https://"+webassets.Host+"/*", webview.WebResourceContextAll); err != nil {
+		w.Destroy()
+		return fmt.Errorf("register frontend resource filter: %w", err)
+	}
 	if err := a.bind(); err != nil {
 		w.Destroy()
 		return err
@@ -147,12 +152,12 @@ func (a *Application) Run() error {
 		return err
 	}
 	a.installRuntimeInstrumentation()
-	if err := window.ConfigureFrontendOrigin(w, webassets.Host, a.frontend.Directory, func() {
+	if err := window.ConfigureNavigationCompleted(w, func() {
 		a.logger.Debugf("navigation completed")
 		w.Eval(`if (typeof window.ReportRuntimeEvent === "function") { window.ReportRuntimeEvent("navigation-completed", window.location.href) }`)
 	}); err != nil {
 		w.Destroy()
-		return fmt.Errorf("configure frontend origin: %w", err)
+		return fmt.Errorf("configure navigation observer: %w", err)
 	}
 	if err := window.ApplyChrome(w, 720, 500, a.RequestClose); err != nil {
 		w.Destroy()

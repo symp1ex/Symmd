@@ -5,13 +5,12 @@ package window
 import (
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 	"sync"
 	"unsafe"
 
-	"github.com/jchv/go-webview2/pkg/edge"
 	webview "github.com/symp1ex/go-webview2"
+	"github.com/symp1ex/go-webview2/pkg/edge"
 	"golang.org/x/sys/windows"
 )
 
@@ -28,31 +27,13 @@ var (
 	acceleratorKeyPressedEventArgs2IID = windows.GUID{Data1: 0x03b2c8c8, Data2: 0x7799, Data3: 0x4e34, Data4: [8]byte{0xbd, 0x66, 0xed, 0x26, 0xaa, 0x85, 0xf2, 0xbf}}
 )
 
-// ConfigureFrontendOrigin maps a trusted directory to an HTTPS origin and
-// installs a navigation-completed observer. go-webview2 exposes both features
-// on edge.Chromium but not on its small WebView interface, so this adapter is
-// intentionally isolated and validates the pinned wrapper's concrete layout.
-func ConfigureFrontendOrigin(w webview.WebView, host, directory string, onNavigationCompleted func()) error {
-	if host == "" {
-		return errors.New("virtual frontend host is empty")
-	}
-	info, err := os.Stat(directory)
-	if err != nil {
-		return fmt.Errorf("stat frontend directory: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("frontend path is not a directory")
-	}
+// ConfigureNavigationCompleted installs the existing navigation-completed
+// observer. The standalone wrapper does not expose this callback on its small
+// WebView interface, so this adapter remains isolated here.
+func ConfigureNavigationCompleted(w webview.WebView, onNavigationCompleted func()) error {
 	chromium, err := chromiumFromWebView(w)
 	if err != nil {
 		return err
-	}
-	extended := chromium.GetICoreWebView2_3()
-	if extended == nil {
-		return errors.New("WebView2 runtime does not support virtual host mapping")
-	}
-	if err := extended.SetVirtualHostNameToFolderMapping(host, directory, edge.COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS); err != nil {
-		return fmt.Errorf("map frontend virtual host: %w", err)
 	}
 	chromium.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) {
 		if onNavigationCompleted != nil {

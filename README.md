@@ -4,7 +4,7 @@
 React, Vite, TypeScript, Monaco Editor, and markdown-it. It does not use
 Electron and the production frontend is embedded in one `symmd.exe`.
 
-The project started with the idea: "I wish I could take VSCode's code editor with its syntax highlighting and support for Markdown files, and its preview feature, and create a separate, lightweight application based on that." And that's exactly what I did.
+The project started with the idea: "I wish I could take VSCode's code editor with its syntax highlighting in log files and support for Markdown files, and its preview feature. Create a separate, lightweight application based on that." And that's exactly what I did.
 
 ## What works
 
@@ -44,11 +44,11 @@ Go is deliberately thin. Markdown parsing, editor state, tabs, preview rendering
 themes, and view behavior remain in the frontend. Named bindings are centralized
 in `frontend/src/bridge/native.ts` and `internal/app/app_windows.go`.
 
-The trusted embedded application bundle is extracted into a content-versioned,
-user-private cache directory because WebView2 limits `NavigateToString` to 2 MiB
-and Monaco exceeds that limit. WebView2 maps only that verified directory to the
-fixed `https://app.symmd.local/` virtual origin with cross-origin access denied;
-it is protected by CSP and contains no user Markdown resources.
+The trusted application bundle remains inside the executable and is served from
+its embedded filesystem through WebView2 resource interception. This preserves
+the fixed `https://app.symmd.local/` origin without materializing frontend files
+in a writable user directory; the page remains protected by CSP and contains no
+user Markdown resources.
 
 Local preview images are resolved relative to the saved Markdown document by Go,
 restricted to image files under the document directory and to 25 MiB, then returned
