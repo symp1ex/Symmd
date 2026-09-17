@@ -103,7 +103,7 @@ async function snapshot() {
     bridgeMissing: ${JSON.stringify([
       'ReportRuntimeEvent', 'GetInitialFile', 'OpenFile', 'ReadFile', 'SaveFile', 'SaveFileAs',
       'CheckFile', 'ResolveResource', 'OpenLink', 'SaveLinkAs', 'ShowContextMenu', 'ConfirmDiscard', 'ConfirmReload',
-      'GetPreferences', 'SavePreferences', 'SetDirty', 'WindowMinimize',
+      'GetPreferences', 'SavePreferences', 'SetDirty', 'SetBrowserFindEnabled', 'WindowMinimize',
       'WindowToggleMaximize', 'WindowClose', 'WindowDrag', 'WindowResize', 'CloseAfterSave',
     ])}.filter((name) => typeof window[name] !== 'function'),
     contextMenuProbe: window.__symmdContextMenuProbe,
@@ -241,6 +241,28 @@ if (action === 'snapshot') {
     }
   })`)
   await wait(300)
+} else if (action === 'editor-find-actions') {
+  await evaluate(`[...document.querySelectorAll('.view-switcher button')].find((button) => button.textContent === 'Editor')?.click()`)
+  await wait(500)
+  await evaluate(`document.querySelector('.monaco-editor textarea.inputarea')?.focus()`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ctrlKey: true, code: 'KeyF', key: 'f' }))`)
+  await wait(200)
+  const findState = await evaluate(`(() => { const widget = document.querySelector('.monaco-editor .find-widget'); return { exists: Boolean(widget), className: widget?.className ?? '', ariaHidden: widget?.getAttribute('aria-hidden') } })()`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape', code: 'Escape' }))`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ctrlKey: true, code: 'KeyH', key: 'h' }))`)
+  await wait(200)
+  const replaceState = await evaluate(`(() => { const widget = document.querySelector('.monaco-editor .find-widget'); const replace = widget?.querySelector('.replace-part'); return { widgetClassName: widget?.className ?? '', exists: Boolean(replace), replaceClassName: replace?.className ?? '', ariaHidden: replace?.getAttribute('aria-hidden') } })()`)
+  if (!findState.exists || findState.ariaHidden === 'true' || !replaceState.exists || replaceState.ariaHidden === 'true') throw new Error(`Monaco Find/Replace actions are unavailable: find=${JSON.stringify(findState)} replace=${JSON.stringify(replaceState)}`)
+} else if (action === 'preview-find') {
+  await evaluate(`[...document.querySelectorAll('.view-switcher button')].find((button) => button.textContent === 'Preview')?.click()`)
+  await wait(500)
+  const point = await evaluate(`(() => { const bounds = document.querySelector('.markdown-preview')?.getBoundingClientRect(); return bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + 80 } : null })()`)
+  if (!point) throw new Error('Preview was not found')
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'f', code: 'KeyF', modifiers: 2, windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'f', code: 'KeyF', modifiers: 2, windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70 })
+  await wait(500)
 } else if (action === 'mermaid-theme') {
   await wait(2500)
   const previousSvg = await evaluate(`document.querySelector('.mermaid-diagram > svg')?.outerHTML ?? ''`)

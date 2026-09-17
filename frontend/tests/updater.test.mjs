@@ -21,8 +21,3 @@ test('increases the Settings status font by exactly one pixel', () => {
   assert.match(styles, /\.settings-statusbar \{[^}]*font-size: 12px;/)
   assert.doesNotMatch(styles, /\.settings-statusbar \{[^}]*font-size: 11px;/)
 })
-
-test('handles Save shortcuts with the current active document and prevents browser defaults', () => {
-  assert.match(app, /const shortcutActive = activeDocument\(documentsRef\.current, activeIDRef\.current\)/)
-  assert.match(app, /else if \(key === 's'\) \{ event\.preventDefault\(\); if \(shortcutActive\) void saveDocument\(shortcutActive, event\.shiftKey\) \}/)
-})

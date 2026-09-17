@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import * as monaco from './monaco'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker&inline'
 import 'monaco-editor/min/vs/editor/editor.main.css'
@@ -77,7 +77,12 @@ interface Props {
   language: DocumentLanguage
 }
 
-export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, theme, fontSize, wordWrap, language }: Props) {
+export interface MarkdownEditorHandle {
+  showFind(replace: boolean): void
+  findNext(previous: boolean): void
+}
+
+export const MarkdownEditor = forwardRef<MarkdownEditorHandle, Props>(function MarkdownEditor({ value, onChange, onScrollLine, revealLine, theme, fontSize, wordWrap, language }, ref) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const changingRef = useRef(false)
@@ -85,6 +90,19 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
   const onScrollLineRef = useRef(onScrollLine)
   onChangeRef.current = onChange
   onScrollLineRef.current = onScrollLine
+
+  const runAction = (id: string) => {
+    const editor = editorRef.current
+    const action = editor?.getAction(id)
+    if (!editor || !action) throw new Error(`Monaco action is not registered: ${id}`)
+    editor.focus()
+    void action.run()
+  }
+
+  useImperativeHandle(ref, () => ({
+    showFind: (replace) => runAction(replace ? 'editor.action.startFindReplaceAction' : 'actions.find'),
+    findNext: (previous) => runAction(previous ? 'editor.action.previousMatchFindAction' : 'editor.action.nextMatchFindAction'),
+  }), [])
 
   useEffect(() => {
     const host = hostRef.current
@@ -164,4 +182,4 @@ export function MarkdownEditor({ value, onChange, onScrollLine, revealLine, them
   }, [revealLine])
 
   return <div className="editor-host" ref={hostRef} />
-}
+})

@@ -1,6 +1,5 @@
+import 'monaco-editor/esm/vs/editor/editor.all'
 import { editor, languages } from 'monaco-editor/esm/vs/editor/editor.api'
-import 'monaco-editor/esm/vs/editor/contrib/folding/browser/folding'
-import 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard'
 import 'monaco-editor/esm/vs/basic-languages/monaco.contribution'
 import 'monaco-editor/esm/vs/language/json/monaco.contribution'
 import { conf as batConfiguration, language as batLanguage } from 'monaco-editor/esm/vs/basic-languages/bat/bat'

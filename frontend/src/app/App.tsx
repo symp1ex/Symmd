@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { native, type DroppedItem, type MarkdownFile, type Preferences, type UpdateCheckResult } from '../bridge/native'
-import { MarkdownEditor } from '../editor/MarkdownEditor'
+import { MarkdownEditor, type MarkdownEditorHandle } from '../editor/MarkdownEditor'
 import { MarkdownPreview } from '../preview/MarkdownPreview'
 import { defaultPreviewZoom, nextPreviewZoom } from '../preview/zoom'
 import { effectiveViewMode, isLogDocument, isSupportedDocumentName, languageForDocument, type ViewMode } from '../editor/languages'
 import { activeDocument, applySavedFile, isDirty, requiresSaveAs, type DocumentState } from './documents'
+import { matchShortcut, type ActivePane } from './shortcuts'
 
 type UpdateState = 'disabled' | 'idle' | 'checking' | 'available' | 'installing' | 'error'
 
@@ -53,6 +54,10 @@ export function App() {
   const promptedChangesRef = useRef(new Set<string>())
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   const settingsPopoverRef = useRef<HTMLElement>(null)
+  const settingsOpenRef = useRef(settingsOpen)
+  const markdownEditorRef = useRef<MarkdownEditorHandle>(null)
+  const activePaneRef = useRef<ActivePane>('editor')
+  const browserFindEnabledRef = useRef(false)
   const documentsRef = useRef(documents)
   const activeIDRef = useRef(activeID)
   const autoReloadExternalChangesRef = useRef(preferences.autoReloadExternalChanges)
@@ -63,6 +68,7 @@ export function App() {
   activeIDRef.current = activeID
   autoReloadExternalChangesRef.current = preferences.autoReloadExternalChanges
   checkForUpdatesRef.current = preferences.checkForUpdates
+  settingsOpenRef.current = settingsOpen
 
   const active = activeDocument(documents, activeID)
   const logDocument = active ? isLogDocument(active) : false
@@ -70,6 +76,14 @@ export function App() {
   const previewSource = useDebounced(active?.content ?? '', 100)
   const persistedSplit = useDebounced(splitPercent, 300)
   const anyDirty = documents.some(isDirty)
+
+  const setActivePane = useCallback((pane: ActivePane) => {
+    activePaneRef.current = pane
+    const browserFindEnabled = pane === 'preview' && !settingsOpenRef.current
+    if (browserFindEnabledRef.current === browserFindEnabled) return
+    browserFindEnabledRef.current = browserFindEnabled
+    void native.setBrowserFindEnabled(browserFindEnabled)
+  }, [])
 
   const setUpdateStateValue = useCallback((nextState: UpdateState) => {
     updateStateRef.current = nextState
@@ -336,23 +350,36 @@ export function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase()
-      const shortcutActive = activeDocument(documentsRef.current, activeIDRef.current)
-      if (keyChordRef.current) {
-        keyChordRef.current = false
-        if (key === 'v') { event.preventDefault(); if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('split') }
-        return
+      if (event.target instanceof Element && event.target.closest('.settings-popover') && ['KeyF', 'KeyH', 'F3'].includes(event.code)) return
+      const match = matchShortcut(event, activePaneRef.current, keyChordRef.current)
+      keyChordRef.current = match.chordPending
+      if (match.preventDefault) {
+        event.preventDefault()
+        event.stopPropagation()
       }
-      if (event.ctrlKey && key === 'k') { keyChordRef.current = true; return }
-      if (!event.ctrlKey) return
-      if (key === 'n') { event.preventDefault(); const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }
-      else if (key === 'o') { event.preventDefault(); void openFile() }
-      else if (key === 's') { event.preventDefault(); if (shortcutActive) void saveDocument(shortcutActive, event.shiftKey) }
-      else if (event.shiftKey && key === 'v') { event.preventDefault(); if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('preview') }
+      if (!match.command) return
+      if (event.repeat && ['new-document', 'open-document', 'save', 'save-as', 'show-split', 'show-preview'].includes(match.command)) return
+      const shortcutActive = activeDocument(documentsRef.current, activeIDRef.current)
+      if (match.command === 'new-document') { const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }
+      else if (match.command === 'open-document') { void openFile() }
+      else if (match.command === 'save' || match.command === 'save-as') { if (shortcutActive) void saveDocument(shortcutActive, match.command === 'save-as') }
+      else if (match.command === 'show-split') { if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('split') }
+      else if (match.command === 'show-preview') { if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('preview') }
+      else if (match.command === 'monaco-find' || match.command === 'monaco-replace') { markdownEditorRef.current?.showFind(match.command === 'monaco-replace') }
+      else if (match.command === 'monaco-find-next' || match.command === 'monaco-find-previous') { markdownEditorRef.current?.findNext(match.command === 'monaco-find-previous') }
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
+
+  useEffect(() => {
+    if (activeViewMode === 'editor') setActivePane('editor')
+    else if (activeViewMode === 'preview') setActivePane('preview')
+  }, [activeViewMode, setActivePane])
+
+  useEffect(() => {
+    setActivePane(activePaneRef.current)
+  }, [settingsOpen, setActivePane])
 
   useEffect(() => {
     setEditorLine(1)
@@ -511,15 +538,15 @@ export function App() {
         </div>
         <button className="tabs__new" aria-label="New document" onClick={() => { const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }}>+</button>
         <div className="view-switcher">
-          <button className={activeViewMode === 'editor' ? 'active' : ''} onClick={() => setViewMode('editor')}>Editor</button>
+          <button className={activeViewMode === 'editor' ? 'active' : ''} onClick={() => { setActivePane('editor'); setViewMode('editor') }}>Editor</button>
           <button className={activeViewMode === 'split' ? 'active' : ''} disabled={logDocument} title={logDocument ? 'Unavailable for log files' : undefined} onClick={() => setViewMode('split')}>Split</button>
-          <button className={activeViewMode === 'preview' ? 'active' : ''} disabled={logDocument} title={logDocument ? 'Unavailable for log files' : undefined} onClick={() => setViewMode('preview')}>Preview</button>
+          <button className={activeViewMode === 'preview' ? 'active' : ''} disabled={logDocument} title={logDocument ? 'Unavailable for log files' : undefined} onClick={() => { setActivePane('preview'); setViewMode('preview') }}>Preview</button>
         </div>
       </div>
       <main className={`workspace workspace--${activeViewMode}`}>
-        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined}><MarkdownEditor value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} /></section>}
+        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined} onPointerDownCapture={() => setActivePane('editor')} onFocusCapture={() => setActivePane('editor')}><MarkdownEditor ref={markdownEditorRef} value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} /></section>}
         {activeViewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
-        {activeViewMode !== 'editor' && <section className="preview-pane"><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={addFile} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
+        {activeViewMode !== 'editor' && <section className="preview-pane" onPointerDownCapture={() => setActivePane('preview')} onFocusCapture={() => setActivePane('preview')}><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={addFile} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
       </main>
       <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>{logDocument ? 'Log' : 'Markdown'} · UTF-8</span></footer>
     </div>

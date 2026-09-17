@@ -113,6 +113,7 @@ export function MarkdownPreview({ source, documentPath, sourceLine, onSourceLine
     <article
       className={`markdown-preview markdown-preview--${theme}`}
       ref={hostRef}
+      tabIndex={0}
       onScroll={(event) => {
         if (syncingRef.current || !syncEnabled) return
         const root = event.currentTarget

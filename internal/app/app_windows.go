@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -68,17 +69,18 @@ type updateService interface {
 }
 
 type Application struct {
-	frontend   webassets.Frontend
-	initial    *files.MarkdownFile
-	version    string
-	w          webview.WebView
-	hwnd       uintptr
-	logger     logger.Logger
-	updater    updateService
-	mu         sync.Mutex
-	settingsMu sync.Mutex
-	dirty      bool
-	closing    bool
+	frontend           webassets.Frontend
+	initial            *files.MarkdownFile
+	version            string
+	w                  webview.WebView
+	hwnd               uintptr
+	logger             logger.Logger
+	updater            updateService
+	mu                 sync.Mutex
+	settingsMu         sync.Mutex
+	browserFindEnabled atomic.Bool
+	dirty              bool
+	closing            bool
 }
 
 func New(frontend webassets.Frontend, initial *files.MarkdownFile, version string) *Application {
@@ -140,6 +142,10 @@ func (a *Application) Run() error {
 		w.Destroy()
 		return err
 	}
+	if err := window.EnableBrowserFindAccelerators(w, a.browserFindEnabled.Load); err != nil {
+		w.Destroy()
+		return err
+	}
 	a.installRuntimeInstrumentation()
 	if err := window.ConfigureFrontendOrigin(w, webassets.Host, a.frontend.Directory, func() {
 		a.logger.Debugf("navigation completed")
@@ -194,6 +200,7 @@ func (a *Application) bind() error {
 		{"CheckApplicationUpdate", a.checkApplicationUpdate},
 		{"InstallApplicationUpdate", a.installApplicationUpdate},
 		{"SetDirty", a.setDirty},
+		{"SetBrowserFindEnabled", a.browserFindEnabled.Store},
 		{"WindowMinimize", func() { window.Minimize(a.w) }},
 		{"WindowToggleMaximize", func() bool { return window.ToggleMaximized(a.w) }},
 		{"WindowClose", a.RequestClose},

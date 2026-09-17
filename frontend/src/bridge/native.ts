@@ -57,6 +57,7 @@ declare global {
     CheckApplicationUpdate(automatic: boolean): Promise<UpdateCheckStartResult>
     InstallApplicationUpdate(): Promise<UpdateInstallResult>
     SetDirty(dirty: boolean): Promise<void>
+    SetBrowserFindEnabled(enabled: boolean): Promise<void>
     WindowMinimize(): Promise<void>
     WindowToggleMaximize(): Promise<boolean>
     WindowClose(): Promise<void>
@@ -86,4 +87,5 @@ export const native = {
   checkApplicationUpdate: (automatic: boolean) => window.CheckApplicationUpdate(automatic),
   installApplicationUpdate: () => window.InstallApplicationUpdate(),
   setDirty: (dirty: boolean) => window.SetDirty(dirty),
+  setBrowserFindEnabled: (enabled: boolean) => window.SetBrowserFindEnabled(enabled),
 }
