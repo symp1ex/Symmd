@@ -1,9 +1,8 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { native, type LogChunk, type LogInfo } from '../bridge/native'
+import * as monaco from '../editor/monaco'
 import { logTokenRules } from '../editor/logLanguage'
-import { appendLogChunk, prependLogChunk, visibleLogLines } from './viewport'
-
-const highlightRules = logTokenRules.map(({ pattern, token }) => ({ pattern: new RegExp(pattern.source, `${pattern.flags}g`), token }))
+import { appendLogChunk, prependLogChunk, visibleLogLines, visualLogRows, type VisualLogRow } from './viewport'
 
 async function copySelectedText(text: string) {
   try {
@@ -26,22 +25,49 @@ async function copySelectedText(text: string) {
   }
 }
 
-function highlighted(text: string) {
-  const parts = []
-  let position = 0
-  while (position < text.length && parts.length < 80) {
-    let found: { index: number; value: string; token: string } | undefined
-    for (const rule of highlightRules) {
-      rule.pattern.lastIndex = position
-      const match = rule.pattern.exec(text)
-      if (match && match[0] && (!found || match.index < found.index)) found = { index: match.index, value: match[0], token: rule.token }
-    }
-    if (!found) break
-    if (found.index > position) parts.push(<span key={position}>{text.slice(position, found.index)}</span>)
-    parts.push(<span key={found.index} className={`log-token--${found.token.split('.').at(-1)}`}>{found.value}</span>)
-    position = found.index + found.value.length
+function selectedLogText(host: HTMLElement): string {
+  const selection = window.getSelection()
+  if (!selection?.rangeCount) return ''
+  const range = selection.getRangeAt(0)
+  const pieces: string[] = []
+  let previousOffset: string | undefined
+  for (const row of host.querySelectorAll<HTMLElement>('.log-row')) {
+    const content = row.querySelector<HTMLElement>('.log-text')
+    if (!content || !range.intersectsNode(content)) continue
+    const rowRange = document.createRange()
+    rowRange.selectNodeContents(content)
+    const overlap = range.cloneRange()
+    if (overlap.compareBoundaryPoints(Range.START_TO_START, rowRange) < 0) overlap.setStart(rowRange.startContainer, rowRange.startOffset)
+    if (overlap.compareBoundaryPoints(Range.END_TO_END, rowRange) > 0) overlap.setEnd(rowRange.endContainer, rowRange.endOffset)
+    const text = overlap.toString()
+    if (!text) continue
+    const offset = row.dataset.logOffset
+    if (pieces.length && offset !== previousOffset) pieces.push('\n')
+    pieces.push(text)
+    previousOffset = offset
   }
-  if (position < text.length) parts.push(<span key={position}>{text.slice(position)}</span>)
+  return pieces.join('')
+}
+
+function highlighted(row: VisualLogRow, cache: Map<string, monaco.Token[]>) {
+  const parts = []
+  let covered = row.start
+  let tokens = cache.get(row.line.text)
+  if (!tokens) {
+    tokens = monaco.editor.tokenize(row.line.text, 'log')[0] ?? []
+    cache.set(row.line.text, tokens)
+  }
+  const end = row.start + row.text.length
+  for (let index = 0; index < tokens.length && parts.length < 256; index++) {
+    const token = tokens[index]
+    const from = Math.max(row.start, token.offset)
+    const to = Math.min(end, tokens[index + 1]?.offset ?? row.line.text.length)
+    if (from >= to) continue
+    const rule = logTokenRules.find(({ token: name }) => token.type === name || token.type.startsWith(`${name}.`))
+    parts.push(<span key={from} className={rule ? `log-token--${rule.token.split('.').at(-1)}` : undefined}>{row.line.text.slice(from, to)}</span>)
+    covered = to
+  }
+  if (covered < end) parts.push(<span key={covered}>{row.line.text.slice(covered, end)}</span>)
   return parts
 }
 
@@ -50,11 +76,13 @@ export interface LogViewerHandle {
   findNext(previous: boolean): void
 }
 
-interface Props { info: LogInfo; theme: 'dark' | 'light'; fontSize: number; onInfo(info: LogInfo): void; onError(message: string): void }
+interface Props { info: LogInfo; theme: 'dark' | 'light'; fontSize: number; wordWrap: boolean; onInfo(info: LogInfo): void; onError(message: string): void }
 
-export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({ info, theme, fontSize, onInfo, onError }, ref) {
+export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({ info, theme, fontSize, wordWrap, onInfo, onError }, ref) {
   const [chunk, setChunk] = useState<LogChunk | null>(null)
   const [height, setHeight] = useState(600)
+  const [width, setWidth] = useState(800)
+  const [charWidth, setCharWidth] = useState(fontSize * 0.602)
   const [scrollTop, setScrollTop] = useState(0)
   const [query, setQuery] = useState('')
   const [findOpen, setFindOpen] = useState(false)
@@ -72,6 +100,31 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   if (info.revision > infoRef.current.revision || (info.revision === infoRef.current.revision && info.size >= infoRef.current.size)) infoRef.current = info
   chunkRef.current = chunk
   const rowHeight = Math.max(22, fontSize + 7)
+  const columns = Math.max(1, Math.floor((width - 126) / charWidth))
+  const lines = chunk?.lines ?? []
+  const rows = useMemo(() => visualLogRows(lines, wordWrap, columns), [lines, wordWrap, columns])
+  const layoutRef = useRef({ rows, wordWrap, columns, rowHeight })
+
+  useLayoutEffect(() => {
+    const previous = layoutRef.current
+    const host = scrollRef.current
+    if (host && (previous.wordWrap !== wordWrap || previous.columns !== columns || previous.rowHeight !== rowHeight)) {
+      const oldRow = previous.rows[Math.floor(scrollTop / previous.rowHeight)]
+      const index = oldRow && rows.findIndex((row) => row.line.offset === oldRow.line.offset)
+      if (index !== undefined && index >= 0) {
+        host.scrollTop = index * rowHeight
+        setScrollTop(host.scrollTop)
+      }
+    }
+    layoutRef.current = { rows, wordWrap, columns, rowHeight }
+  })
+
+  useEffect(() => {
+    const context = document.createElement('canvas').getContext('2d')
+    if (!context) return
+    context.font = `${fontSize}px Consolas, monospace`
+    setCharWidth(context.measureText('M').width || fontSize * 0.602)
+  }, [fontSize])
 
   const load = async (offset: number, align = false, bottom = false, append = false) => {
     const request = ++serial.current
@@ -99,7 +152,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
         const merged = appendLogChunk(current, result)
         previousLines.current = merged.dropped.slice(-120)
         display = merged.chunk
-        nextScrollTop = (scrollRef.current?.scrollTop ?? 0) - merged.dropped.length * rowHeight
+        nextScrollTop = (scrollRef.current?.scrollTop ?? 0) - visualLogRows(merged.dropped, wordWrap, columns).length * rowHeight
       } else previousLines.current = []
       currentOffset.current = display.lines[0]?.offset ?? display.next
       chunkRef.current = display
@@ -128,8 +181,10 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     }).catch((error: unknown) => { if (active) onError(error instanceof Error ? error.message : String(error)) })
     const host = scrollRef.current
     if (!host) return () => { active = false; serial.current++ }
-    const observer = new ResizeObserver(() => setHeight(host.clientHeight))
+    const observer = new ResizeObserver(() => { setHeight(host.clientHeight); setWidth(host.clientWidth) })
     observer.observe(host)
+    setHeight(host.clientHeight)
+    setWidth(host.clientWidth)
     return () => { active = false; serial.current++; void native.cancelLogSearch(info.handle).catch(() => undefined); observer.disconnect() }
   }, [info.handle])
 
@@ -170,7 +225,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     if (!query) { setFindOpen(true); findRef.current?.focus(); return }
     const request = ++serial.current
     loading.current = false
-    const start = matchOffset === undefined ? (lines[Math.floor(scrollTop / rowHeight)]?.offset ?? currentOffset.current) : matchOffset + (previous ? 0 : 1)
+    const start = matchOffset === undefined ? (rows[Math.floor(scrollTop / rowHeight)]?.line.offset ?? currentOffset.current) : matchOffset + (previous ? 0 : 1)
     setStatus('Searching…')
     try {
       const id = await native.findLog(info.handle, query, start, previous)
@@ -197,8 +252,8 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     findNext: (previous) => { void find(previous) },
   }))
 
-  const lines = chunk?.lines ?? []
-  const { first, visible } = visibleLogLines(lines, scrollTop, height, rowHeight)
+  const { first, visible } = visibleLogLines(rows, scrollTop, height, rowHeight)
+  const tokenCache = new Map<string, monaco.Token[]>()
   const position = Math.round(1_000_000 * (currentOffset.current / Math.max(1, info.size)))
 
   const showPrevious = () => {
@@ -212,7 +267,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     chunkRef.current = { ...current, lines: all, next: all.at(-1)?.next ?? current.next }
     setChunk(chunkRef.current)
     suppressScroll.current = true
-    const target = host.scrollTop + earlier.length * rowHeight
+    const target = host.scrollTop + visualLogRows(earlier, wordWrap, columns).length * rowHeight
     requestAnimationFrame(() => {
       if (!scrollRef.current) return
       scrollRef.current.scrollTop = target
@@ -249,7 +304,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
       chunkRef.current = merged.chunk
       setChunk(merged.chunk)
       suppressScroll.current = true
-      const target = host.scrollTop + merged.added * rowHeight
+      const target = host.scrollTop + visualLogRows(merged.chunk.lines.slice(0, merged.added), wordWrap, columns).length * rowHeight
       requestAnimationFrame(() => {
         if (request !== serial.current || !scrollRef.current) return
         scrollRef.current.scrollTop = target
@@ -263,7 +318,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     }
   }
 
-  return <div className={`log-viewer log-viewer--${theme}`} style={{ fontSize }}>
+  return <div className={`log-viewer log-viewer--${theme}${wordWrap ? ' log-viewer--wrap' : ''}`} style={{ fontSize }}>
     <div className="log-toolbar">
       <span>Byte {currentOffset.current.toLocaleString()} / {info.size.toLocaleString()}</span>
       <input aria-label="Log position" type="range" min="0" max="1000000" value={position} onChange={(event) => void load(Math.floor(info.size * Number(event.target.value) / 1_000_000), true)} />
@@ -275,25 +330,28 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
       const host = event.currentTarget
       setScrollTop(host.scrollTop)
       if (loading.current || suppressScroll.current || !chunkRef.current) return
+      if (host.scrollTop === 0 && currentOffset.current > 0 && !showPrevious()) { void loadPrevious(); return }
       if (host.scrollHeight > host.clientHeight && host.scrollTop + host.clientHeight >= host.scrollHeight - rowHeight * 6 && chunkRef.current.next < infoRef.current.size) void load(chunkRef.current.next, false, false, true)
     }} onWheel={(event) => {
       const host = event.currentTarget
       if (loading.current || suppressScroll.current) return
       if (event.deltaY < 0 && host.scrollTop === 0 && currentOffset.current > 0 && !showPrevious()) void loadPrevious()
       else if (event.deltaY > 0 && host.scrollHeight <= host.clientHeight && chunkRef.current && chunkRef.current.next < infoRef.current.size) void load(chunkRef.current.next, false, false, true)
+    }} onCopy={(event) => {
+      const selected = selectedLogText(event.currentTarget)
+      if (selected && event.clipboardData) { event.preventDefault(); event.clipboardData.setData('text/plain', selected) }
     }} onContextMenu={(event) => {
       event.preventDefault()
-      const selection = window.getSelection()
-      const selected = selection?.toString() ?? ''
+      const selected = selectedLogText(event.currentTarget)
       void native.showContextMenu({ editable: false, hasSelection: !!selected, canSelectAll: false, link: false, canSaveLink: false }).then((command) => {
         if (command === 'copy' && selected) {
           void copySelectedText(selected).catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
         }
       }).catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
     }}>
-      <div style={{ height: lines.length * rowHeight, position: 'relative' }}>
+      <div style={{ height: rows.length * rowHeight, position: 'relative' }}>
         <div style={{ position: 'absolute', top: first * rowHeight, left: 0, right: 0 }}>
-          {visible.map((line) => <div className="log-row" key={line.offset} style={{ height: rowHeight }}><span className="log-offset">{line.offset.toLocaleString()}</span><span className="log-text">{highlighted(line.text)}{line.truncated && <span className="log-truncated"> [line truncated]</span>}</span></div>)}
+          {visible.map((row) => <div className={`log-row${row.overflow ? ' log-row--overflow' : ''}`} data-log-offset={row.line.offset} key={`${row.line.offset}:${row.part}`} style={{ height: rowHeight }}><span className="log-offset">{row.part === 0 ? row.line.offset.toLocaleString() : ''}</span><span className="log-text">{highlighted(row, tokenCache)}{row.last && row.line.truncated && <span className="log-truncated"> [line truncated]</span>}</span></div>)}
         </div>
       </div>
     </div>
