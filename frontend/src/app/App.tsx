@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { native, type DroppedItem, type MarkdownFile, type Preferences, type UpdateCheckResult } from '../bridge/native'
 import { MarkdownEditor, type MarkdownEditorHandle } from '../editor/MarkdownEditor'
+import { LogViewer, type LogViewerHandle } from '../log/LogViewer'
 import { MarkdownPreview } from '../preview/MarkdownPreview'
 import { defaultPreviewZoom, nextPreviewZoom } from '../preview/zoom'
 import { effectiveViewMode, isLogDocument, isSupportedDocumentName, languageForDocument, type ViewMode } from '../editor/languages'
@@ -56,9 +57,11 @@ export function App() {
   const settingsPopoverRef = useRef<HTMLElement>(null)
   const settingsOpenRef = useRef(settingsOpen)
   const markdownEditorRef = useRef<MarkdownEditorHandle>(null)
+  const logViewerRef = useRef<LogViewerHandle>(null)
   const activePaneRef = useRef<ActivePane>('editor')
   const browserFindEnabledRef = useRef(false)
   const documentsRef = useRef(documents)
+  const openingPathsRef = useRef(new Set<string>())
   const activeIDRef = useRef(activeID)
   const autoReloadExternalChangesRef = useRef(preferences.autoReloadExternalChanges)
   const checkForUpdatesRef = useRef(preferences.checkForUpdates)
@@ -226,31 +229,38 @@ export function App() {
     return () => document.removeEventListener('pointerdown', closeSettings, true)
   }, [settingsOpen])
 
-  useEffect(() => {
-    let mounted = true
-    void native.initialFile().then((file) => {
-      if (!mounted || !file) return
-      const document = documentFromFile(file)
-      setDocuments([document])
-      setActiveID(document.id)
-    }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))
-    return () => { mounted = false }
-  }, [])
-
-  const addFile = useCallback((file: MarkdownFile) => {
-    const existing = documentsRef.current.find((document) => document.path && document.path.toLocaleLowerCase() === file.path.toLocaleLowerCase())
+  const addFile = useCallback(async (file: MarkdownFile, initial = false) => {
+    const pathKey = file.path.toLocaleLowerCase()
+    const existing = documentsRef.current.find((document) => document.path && document.path.toLocaleLowerCase() === pathKey)
     if (existing) {
       setActiveID(existing.id)
       return
     }
+    if (pathKey && openingPathsRef.current.has(pathKey)) return
     const document = documentFromFile(file)
-    setDocuments((current) => [...current, document])
-    setActiveID(document.id)
+    if (pathKey) openingPathsRef.current.add(pathKey)
+    try {
+      if (isLogDocument(file)) document.log = await native.openLog(file.path)
+      setDocuments((current) => initial && current.length === 1 && !current[0].path ? [document] : [...current, document])
+      setActiveID(document.id)
+    } finally {
+      if (pathKey) openingPathsRef.current.delete(pathKey)
+    }
   }, [])
 
   useEffect(() => {
+    let mounted = true
+    void native.initialFile().then(async (file) => {
+      if (!mounted || !file) return
+      await addFile(file, true)
+    }).catch((error: unknown) => { if (mounted) setMessage(error instanceof Error ? error.message : String(error)) })
+    return () => { mounted = false }
+  }, [addFile])
+
+  useEffect(() => {
     const consume = (item: DroppedItem) => {
-      if (item.kind === 'file') addFile(item.file)
+      if (item.kind === 'file') void addFile(item.file).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))
+      else if (item.kind === 'log') { setMessage('Select the dropped log in the file dialog'); void openFile() }
       else setMessage(item.message)
     }
     const onDrop = (event: Event) => consume((event as CustomEvent<DroppedItem>).detail)
@@ -267,11 +277,12 @@ export function App() {
   const openFile = async () => {
     try {
       const file = await native.openFile()
-      if (file) addFile(file)
+      if (file) await addFile(file)
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
   }
 
   const saveDocument = async (document: DocumentState, saveAs = false): Promise<boolean> => {
+    if (document.log) return false
     try {
       const file = requiresSaveAs(document, saveAs)
         ? await native.saveFileAs(document.content)
@@ -291,6 +302,7 @@ export function App() {
     if (index < 0) return
     const document = documentsRef.current[index]
     if (isDirty(document) && !await native.confirmDiscard(document.name)) return
+    if (document.log) void native.closeLog(document.log.handle).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error)))
     const remaining = documentsRef.current.filter((item) => item.id !== id)
     const nextDocuments = remaining.length ? remaining : [newDocument()]
     setDocuments(nextDocuments)
@@ -313,7 +325,7 @@ export function App() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       for (const document of documentsRef.current) {
-        if (!document.path || promptedChangesRef.current.has(document.path)) continue
+        if (!document.path || document.log || promptedChangesRef.current.has(document.path)) continue
         void native.checkFile(document.path).then(async (state) => {
           if (!state.exists || !document.modifiedNs || state.modifiedNs === document.modifiedNs) return
           promptedChangesRef.current.add(document.path)
@@ -362,11 +374,11 @@ export function App() {
       const shortcutActive = activeDocument(documentsRef.current, activeIDRef.current)
       if (match.command === 'new-document') { const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }
       else if (match.command === 'open-document') { void openFile() }
-      else if (match.command === 'save' || match.command === 'save-as') { if (shortcutActive) void saveDocument(shortcutActive, match.command === 'save-as') }
+      else if (match.command === 'save' || match.command === 'save-as') { if (shortcutActive && !shortcutActive.log) void saveDocument(shortcutActive, match.command === 'save-as') }
       else if (match.command === 'show-split') { if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('split') }
       else if (match.command === 'show-preview') { if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('preview') }
-      else if (match.command === 'monaco-find' || match.command === 'monaco-replace') { markdownEditorRef.current?.showFind(match.command === 'monaco-replace') }
-      else if (match.command === 'monaco-find-next' || match.command === 'monaco-find-previous') { markdownEditorRef.current?.findNext(match.command === 'monaco-find-previous') }
+      else if (match.command === 'monaco-find' || match.command === 'monaco-replace') { if (shortcutActive?.log) { if (match.command === 'monaco-find') logViewerRef.current?.showFind() } else markdownEditorRef.current?.showFind(match.command === 'monaco-replace') }
+      else if (match.command === 'monaco-find-next' || match.command === 'monaco-find-previous') { if (shortcutActive?.log) logViewerRef.current?.findNext(match.command === 'monaco-find-previous'); else markdownEditorRef.current?.findNext(match.command === 'monaco-find-previous') }
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
@@ -434,11 +446,13 @@ export function App() {
       onDrop={(event) => {
         if (event.defaultPrevented) return
         event.preventDefault()
+        let logRequested = false
         for (const file of event.dataTransfer.files) {
           if (!isSupportedDocumentName(file.name)) {
             setMessage(`Unsupported file: ${file.name}. Only Markdown and log files can be opened.`)
             continue
           }
+          if (/\.log$/i.test(file.name)) { if (!logRequested) { setMessage('Select the dropped log in the file dialog'); void openFile(); logRequested = true } continue }
           void file.text()
             .then((content) => addFile({ path: '', name: file.name, content, modifiedNs: 0 }))
             .catch((error: unknown) => setMessage(`Could not read ${file.name}: ${error instanceof Error ? error.message : String(error)}`))
@@ -450,8 +464,8 @@ export function App() {
         <span className="titlebar__name">Symmd</span>
         <nav className="titlebar__menu" onPointerDown={(event) => event.stopPropagation()}>
           <button onClick={() => void openFile()}>Open</button>
-          <button onClick={() => void saveDocument(active)}>Save</button>
-          <button onClick={() => void saveDocument(active, true)}>Save As</button>
+          <button disabled={logDocument} onClick={() => void saveDocument(active)}>Save</button>
+          <button disabled={logDocument} onClick={() => void saveDocument(active, true)}>Save As</button>
         </nav>
         <div className="titlebar__controls" onPointerDown={(event) => event.stopPropagation()}>
           <button
@@ -506,7 +520,7 @@ export function App() {
         <aside ref={settingsPopoverRef} className="settings-popover" onPointerDown={(event) => event.stopPropagation()}>
           <label>Theme<select value={preferences.theme} onChange={(event) => setPreferences((current) => ({ ...current, theme: event.target.value as Preferences['theme'] }))}><option value="dark">Dark+</option><option value="light">Light+</option></select></label>
           <label>Editor font size<input type="number" min="10" max="32" value={preferences.fontSize} onChange={(event) => setPreferences((current) => ({ ...current, fontSize: Math.min(32, Math.max(10, Number(event.target.value))) }))} /></label>
-          <label><input type="checkbox" checked={preferences.wordWrap} onChange={(event) => setPreferences((current) => ({ ...current, wordWrap: event.target.checked }))} /> Word wrap</label>
+          <label><input type="checkbox" checked={preferences.wordWrap} disabled={logDocument} onChange={(event) => setPreferences((current) => ({ ...current, wordWrap: event.target.checked }))} /> Word wrap</label>
           <label><input type="checkbox" checked={preferences.previewSync} onChange={(event) => setPreferences((current) => ({ ...current, previewSync: event.target.checked }))} /> Preview scroll sync</label>
           <label><input type="checkbox" checked={preferences.autoReloadExternalChanges} onChange={(event) => setPreferences((current) => ({ ...current, autoReloadExternalChanges: event.target.checked }))} /> Autoreload external changes</label>
           <label><input type="checkbox" checked={preferences.checkForUpdates} onChange={(event) => setPreferences((current) => ({ ...current, checkForUpdates: event.target.checked }))} /> Check for updates</label>
@@ -544,9 +558,9 @@ export function App() {
         </div>
       </div>
       <main className={`workspace workspace--${activeViewMode}`}>
-        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined} onPointerDownCapture={() => setActivePane('editor')} onFocusCapture={() => setActivePane('editor')}><MarkdownEditor ref={markdownEditorRef} value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} /></section>}
+        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined} onPointerDownCapture={() => setActivePane('editor')} onFocusCapture={() => setActivePane('editor')}>{active.log ? <LogViewer key={active.id} ref={logViewerRef} info={active.log} theme={preferences.theme} fontSize={preferences.fontSize} onInfo={(info) => setDocuments((current) => current.map((item) => item.id === active.id ? { ...item, log: info, modifiedNs: info.modifiedNs } : item))} onError={setMessage} /> : <MarkdownEditor ref={markdownEditorRef} value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} />}</section>}
         {activeViewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
-        {activeViewMode !== 'editor' && <section className="preview-pane" onPointerDownCapture={() => setActivePane('preview')} onFocusCapture={() => setActivePane('preview')}><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={addFile} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
+        {activeViewMode !== 'editor' && <section className="preview-pane" onPointerDownCapture={() => setActivePane('preview')} onFocusCapture={() => setActivePane('preview')}><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={(file) => { void addFile(file).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error))) }} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
       </main>
       <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>{logDocument ? 'Log' : 'Markdown'} · UTF-8</span></footer>
     </div>

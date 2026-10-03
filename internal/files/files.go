@@ -39,6 +39,9 @@ func IsSupportedDocument(path string) bool {
 }
 
 func Read(path string) (MarkdownFile, error) {
+	if strings.EqualFold(filepath.Ext(path), ".log") {
+		return MarkdownFile{}, errors.New("log files must use range reads")
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return MarkdownFile{}, fmt.Errorf("resolve path: %w", err)
@@ -58,6 +61,9 @@ func Read(path string) (MarkdownFile, error) {
 }
 
 func Write(path, content string) (MarkdownFile, error) {
+	if strings.EqualFold(filepath.Ext(path), ".log") {
+		return MarkdownFile{}, errors.New("log files are read-only")
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return MarkdownFile{}, fmt.Errorf("resolve path: %w", err)

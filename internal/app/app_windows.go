@@ -71,6 +71,7 @@ type updateService interface {
 type Application struct {
 	frontend           webassets.Frontend
 	initial            *files.MarkdownFile
+	logs               files.LogStore
 	version            string
 	w                  webview.WebView
 	hwnd               uintptr
@@ -170,6 +171,9 @@ func (a *Application) Run() error {
 	a.logger.Debugf("navigation starting: url=%s", a.frontend.URL)
 	w.Navigate(a.frontend.URL)
 	w.Run()
+	if err := a.logs.CloseAll(); err != nil {
+		a.logger.Warnf("close log files: %v", err)
+	}
 	a.logger.Infof("message loop stopped")
 	a.mu.Lock()
 	a.closing = true
@@ -188,7 +192,15 @@ func (a *Application) bind() error {
 		{"GetVersion", func() string { return a.version }},
 		{"GetInitialFile", func() *files.MarkdownFile { return a.initial }},
 		{"OpenFile", a.openFile},
-		{"ReadFile", files.Read},
+		{"ReadFile", a.readFile},
+		{"OpenLog", a.logs.Open},
+		{"ReadLog", a.logs.Read},
+		{"ReadLogBefore", a.logs.ReadBefore},
+		{"StatLog", a.logs.Stat},
+		{"FindLog", a.logs.StartFind},
+		{"PollLogSearch", a.logs.PollFind},
+		{"CancelLogSearch", a.logs.CancelFind},
+		{"CloseLog", a.logs.Close},
 		{"SaveFile", files.Write},
 		{"SaveFileAs", a.saveFileAs},
 		{"CheckFile", files.State},
@@ -271,10 +283,16 @@ const runtimeInstrumentation = `(function () {
       publishDrop({ kind: "error", message: "The dropped item is not a file." });
       return;
     }
+    var logRequested = false;
     dropped.forEach(function (file) {
       if (!/\.(md|markdown|log)$/i.test(file.name)) {
         publishDrop({ kind: "error", message: "Unsupported file: " + file.name + ". Only Markdown and log files can be opened." });
         report("drop-rejected", file.name);
+        return;
+      }
+      if (/\.log$/i.test(file.name)) {
+        if (!logRequested) publishDrop({ kind: "log" });
+        logRequested = true;
         return;
       }
       file.text().then(function (content) {
@@ -343,11 +361,18 @@ func (a *Application) openFile() (*files.MarkdownFile, error) {
 	if !files.IsSupportedDocument(path) {
 		return nil, fmt.Errorf("unsupported document: %q", path)
 	}
-	file, err := files.Read(path)
+	file, err := a.readFile(path)
 	if err != nil {
 		return nil, err
 	}
 	return &file, nil
+}
+
+func (a *Application) readFile(path string) (files.MarkdownFile, error) {
+	if strings.EqualFold(filepath.Ext(path), ".log") {
+		return files.DescribeLog(path)
+	}
+	return files.Read(path)
 }
 
 func (a *Application) saveFileAs(content string) (*files.MarkdownFile, error) {
@@ -543,7 +568,7 @@ func (a *Application) openLink(documentPath, reference string) (*files.MarkdownF
 		}
 		return nil, a.openShell(target)
 	}
-	file, err := files.Read(target)
+	file, err := a.readFile(target)
 	if err != nil {
 		return nil, err
 	}
@@ -743,7 +768,13 @@ func LoadInitial(arguments []string) (*files.MarkdownFile, error) {
 	if !files.IsSupportedDocument(path) {
 		return nil, fmt.Errorf("unsupported document: %q", path)
 	}
-	file, err := files.Read(path)
+	var file files.MarkdownFile
+	var err error
+	if strings.EqualFold(filepath.Ext(path), ".log") {
+		file, err = files.DescribeLog(path)
+	} else {
+		file, err = files.Read(path)
+	}
 	if err != nil {
 		return nil, err
 	}

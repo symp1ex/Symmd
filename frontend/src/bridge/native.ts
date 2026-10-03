@@ -4,6 +4,10 @@ export interface MarkdownFile {
   content: string
   modifiedNs: number
 }
+export interface LogInfo { handle: number; path: string; name: string; size: number; modifiedNs: number; revision: number }
+export interface LogLine { offset: number; next: number; text: string; truncated: boolean }
+export interface LogChunk { lines: LogLine[]; next: number; size: number; revision: number }
+export interface LogSearchResult { done: boolean; offset: number; error?: string }
 
 export interface FileState { exists: boolean; modifiedNs: number }
 export interface ContextMenuOptions {
@@ -32,6 +36,7 @@ export type UpdateInstallResult = { ok: boolean; message?: string }
 
 export type DroppedItem =
   | { kind: 'file'; file: MarkdownFile }
+  | { kind: 'log' }
   | { kind: 'error'; message: string }
 
 declare global {
@@ -43,6 +48,14 @@ declare global {
     GetInitialFile(): Promise<MarkdownFile | null>
     OpenFile(): Promise<MarkdownFile | null>
     ReadFile(path: string): Promise<MarkdownFile>
+    OpenLog(path: string): Promise<LogInfo>
+    ReadLog(handle: number, offset: number, align: boolean): Promise<LogChunk>
+    ReadLogBefore(handle: number, offset: number): Promise<LogChunk>
+    StatLog(handle: number): Promise<LogInfo>
+    FindLog(handle: number, query: string, offset: number, previous: boolean): Promise<number>
+    PollLogSearch(handle: number, id: number): Promise<LogSearchResult>
+    CancelLogSearch(handle: number, id: number): Promise<void>
+    CloseLog(handle: number): Promise<void>
     SaveFile(path: string, content: string): Promise<MarkdownFile>
     SaveFileAs(content: string): Promise<MarkdownFile | null>
     CheckFile(path: string): Promise<FileState>
@@ -73,6 +86,14 @@ export const native = {
   initialFile: () => window.GetInitialFile(),
   openFile: () => window.OpenFile(),
   readFile: (path: string) => window.ReadFile(path),
+  openLog: (path: string) => window.OpenLog(path),
+  readLog: (handle: number, offset: number, align = false) => window.ReadLog(handle, offset, align),
+  readLogBefore: (handle: number, offset: number) => window.ReadLogBefore(handle, offset),
+  statLog: (handle: number) => window.StatLog(handle),
+  findLog: (handle: number, query: string, offset: number, previous: boolean) => window.FindLog(handle, query, offset, previous),
+  pollLogSearch: (handle: number, id: number) => window.PollLogSearch(handle, id),
+  cancelLogSearch: (handle: number, id = 0) => window.CancelLogSearch(handle, id),
+  closeLog: (handle: number) => window.CloseLog(handle),
   saveFile: (path: string, content: string) => window.SaveFile(path, content),
   saveFileAs: (content: string) => window.SaveFileAs(content),
   checkFile: (path: string) => window.CheckFile(path),

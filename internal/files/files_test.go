@@ -38,14 +38,13 @@ func TestIsSupportedDocument(t *testing.T) {
 	}
 }
 
-func TestWritePreservesLogExtension(t *testing.T) {
+func TestLogFilesUseReadOnlyRangePath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime.log")
-	file, err := Write(path, "[INFO] ready")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := Read(path); err == nil {
+		t.Fatal("Read accepted a log")
 	}
-	if file.Path != path || filepath.Ext(file.Path) != ".log" || file.Content != "[INFO] ready" {
-		t.Fatalf("Write() = %#v", file)
+	if _, err := Write(path, "[INFO] ready"); err == nil {
+		t.Fatal("Write accepted a log")
 	}
 }
 

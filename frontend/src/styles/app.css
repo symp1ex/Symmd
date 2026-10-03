@@ -69,6 +69,29 @@ button { color: inherit; font: inherit; }
 .workspace--editor .editor-pane, .workspace--preview .preview-pane { flex: 1; }
 .workspace--split .preview-pane { flex: 1; }
 .editor-host { position: absolute; inset: 0; }
+.log-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; font-family: Consolas, monospace; }
+.log-toolbar, .log-find { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #252526; font: 12px "Segoe UI", sans-serif; }
+.log-toolbar input[type="range"] { flex: 1; min-width: 40px; }
+.log-find input { min-width: 80px; flex: 1; }
+.log-scroll { flex: 1; min-height: 0; overflow: auto; white-space: pre; user-select: text; }
+.log-row { display: flex; align-items: center; min-width: max-content; line-height: 1; }
+.log-offset { width: 110px; flex: 0 0 110px; padding-right: 10px; text-align: right; color: #858585; user-select: none; }
+.log-text { padding-right: 16px; }
+.log-truncated { color: #d7ba7d; }
+.log-token--error, .log-token--exceptiontype { color: #f48771; }
+.log-token--warning { color: #d7ba7d; }
+.log-token--info { color: #89d185; }
+.log-token--debug { color: #75beff; }
+.log-token--verbose, .log-token--date { color: #858585; }
+.log-token--constant { color: #b5cea8; }
+.log-token--string, .log-token--exception { color: #ce9178; }
+.log-viewer--light .log-toolbar, .log-viewer--light .log-find { background: #f3f3f3; }
+.log-viewer--light .log-token--error, .log-viewer--light .log-token--exceptiontype { color: #a31515; }
+.log-viewer--light .log-token--warning { color: #795e26; }
+.log-viewer--light .log-token--info { color: #008000; }
+.log-viewer--light .log-token--debug { color: #0451a5; }
+.log-viewer--light .log-token--string, .log-viewer--light .log-token--exception { color: #a31515; }
+.log-viewer--light .log-token--constant { color: #098658; }
 .splitter { flex: 0 0 5px; background: #2b2b2b; cursor: col-resize; z-index: 2; }
 .splitter:hover { background: #007acc; }
 .statusbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 9px; background: #181818; border-top: 1px solid #2b2b2b; color: #9d9d9d; font-size: 11px; }

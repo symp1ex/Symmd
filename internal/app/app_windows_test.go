@@ -25,7 +25,9 @@ func TestLoadInitialSupportedDocuments(t *testing.T) {
 				t.Fatal(err)
 			}
 			file, err := LoadInitial([]string{path})
-			if err != nil || file == nil || file.Path == "" || file.Content != "content" {
+			wantContent := "content"
+			if filepath.Ext(name) == ".log" || filepath.Ext(name) == ".LOG" { wantContent = "" }
+			if err != nil || file == nil || file.Path == "" || file.Content != wantContent {
 				t.Fatalf("LoadInitial() = %#v, %v", file, err)
 			}
 		})

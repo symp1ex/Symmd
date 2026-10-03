@@ -5,7 +5,7 @@ import './styles/app.css'
 import './styles/preview.css'
 
 const bridgeMethods = [
-  'ReportRuntimeEvent', 'GetVersion', 'GetInitialFile', 'OpenFile', 'ReadFile', 'SaveFile', 'SaveFileAs',
+  'ReportRuntimeEvent', 'GetVersion', 'GetInitialFile', 'OpenFile', 'ReadFile', 'OpenLog', 'ReadLog', 'ReadLogBefore', 'StatLog', 'FindLog', 'PollLogSearch', 'CancelLogSearch', 'CloseLog', 'SaveFile', 'SaveFileAs',
   'CheckFile', 'ResolveResource', 'OpenLink', 'ConfirmDiscard', 'ConfirmReload',
   'SaveLinkAs', 'ShowContextMenu',
   'GetPreferences', 'SavePreferences', 'CheckApplicationUpdate', 'InstallApplicationUpdate', 'SetDirty', 'WindowMinimize',

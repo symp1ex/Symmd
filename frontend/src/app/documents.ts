@@ -1,8 +1,9 @@
-import type { MarkdownFile } from '../bridge/native'
+import type { LogInfo, MarkdownFile } from '../bridge/native'
 
 export interface DocumentState extends MarkdownFile {
   id: string
   savedContent: string
+  log?: LogInfo
 }
 
 export function activeDocument(documents: DocumentState[], activeID: string): DocumentState | undefined {
@@ -10,7 +11,7 @@ export function activeDocument(documents: DocumentState[], activeID: string): Do
 }
 
 export function isDirty(document: DocumentState): boolean {
-  return document.content !== document.savedContent
+  return !document.log && document.content !== document.savedContent
 }
 
 export function requiresSaveAs(document: DocumentState, requested: boolean): boolean {
