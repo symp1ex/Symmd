@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -46,13 +47,39 @@ type logEntry struct {
 	info     LogInfo
 	identity os.FileInfo
 	search   *logSearch
+	count    *logCount
 }
 
 type logSearch struct {
-	id     uint64
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	result LogSearchResult
+	id       uint64
+	cancel   context.CancelFunc
+	finished chan struct{}
+	mu       sync.Mutex
+	result   LogSearchResult
+}
+
+type logCount struct {
+	id            uint64
+	cancel        context.CancelFunc
+	finished      chan struct{}
+	matcher       *regexp.Regexp
+	matchBytes    int
+	size          int64
+	revision      uint64
+	mu            sync.Mutex
+	counts        []int64
+	total         int64
+	done          bool
+	err           string
+	ordinalOffset int64
+	ordinal       int64
+}
+
+type LogCountResult struct {
+	Done    bool   `json:"done"`
+	Total   int64  `json:"total"`
+	Ordinal int64  `json:"ordinal"`
+	Error   string `json:"error,omitempty"`
 }
 
 type LogSearchResult struct {
@@ -129,6 +156,9 @@ func (s *LogStore) Stat(handle uint64) (LogInfo, error) {
 		if e.search != nil {
 			e.search.cancel()
 		}
+		if e.count != nil {
+			e.count.cancel()
+		}
 		f, err := openLogFile(e.info.Path)
 		if err != nil {
 			return LogInfo{}, err
@@ -141,6 +171,12 @@ func (s *LogStore) Stat(handle uint64) (LogInfo, error) {
 		e.info.Revision++
 	} else if stat.Size() < e.info.Size || (stat.Size() == e.info.Size && stat.ModTime().UnixNano() != e.info.ModifiedNS) {
 		e.info.Revision++
+		if e.search != nil {
+			e.search.cancel()
+		}
+		if e.count != nil {
+			e.count.cancel()
+		}
 	}
 	e.info.Size, e.info.ModifiedNS = stat.Size(), stat.ModTime().UnixNano()
 	return e.info, nil
@@ -291,16 +327,43 @@ func (s *LogStore) Find(handle uint64, query string, offset int64, previous bool
 	return s.find(context.Background(), handle, query, offset, previous)
 }
 
-func (s *LogStore) find(ctx context.Context, handle uint64, query string, offset int64, previous bool) (int64, error) {
+func logSearchPattern(query string) (*regexp.Regexp, int, error) {
 	if query == "" || len(query) > logSearchSize/2 {
-		return -1, errors.New("search text must be 1 to 524288 bytes")
+		return nil, 0, errors.New("search text must be 1 to 524288 bytes")
+	}
+	matcher, err := regexp.Compile("(?i:" + regexp.QuoteMeta(query) + ")")
+	if err != nil {
+		return nil, 0, err
+	}
+	return matcher, 4 * utf8.RuneCountInString(query), nil
+}
+
+func scanSearchMatches(data []byte, matcher *regexp.Regexp, starts int) (int64, int) {
+	var count int64
+	last := -1
+	for at := 0; at < starts; {
+		match := matcher.FindIndex(data[at:])
+		if match == nil || at+match[0] >= starts {
+			break
+		}
+		last = at + match[0]
+		count++
+		_, width := utf8.DecodeRune(data[last:])
+		at = last + width
+	}
+	return count, last
+}
+
+func (s *LogStore) find(ctx context.Context, handle uint64, query string, offset int64, previous bool) (int64, error) {
+	matcher, matchBytes, err := logSearchPattern(query)
+	if err != nil {
+		return -1, err
 	}
 	e, err := s.entry(handle)
 	if err != nil {
 		return -1, err
 	}
 	e.mu.Lock()
-	needle := []byte(query)
 	size := e.info.Size
 	revision := e.info.Revision
 	if e.file == nil {
@@ -314,7 +377,7 @@ func (s *LogStore) find(ctx context.Context, handle uint64, query string, offset
 	if offset > size {
 		offset = size
 	}
-	buffer := make([]byte, logSearchSize+len(needle)-1)
+	buffer := make([]byte, logSearchSize+matchBytes-1)
 	if !previous {
 		for start := offset; start < size; start += logSearchSize {
 			if err := ctx.Err(); err != nil {
@@ -324,8 +387,8 @@ func (s *LogStore) find(ctx context.Context, handle uint64, query string, offset
 			if readErr != nil && readErr != io.EOF {
 				return -1, readErr
 			}
-			if at := bytes.Index(buffer[:n], needle); at >= 0 {
-				return start + int64(at), nil
+			if match := matcher.FindIndex(buffer[:n]); match != nil && match[0] < logSearchSize {
+				return start + int64(match[0]), nil
 			}
 		}
 	} else {
@@ -341,8 +404,8 @@ func (s *LogStore) find(ctx context.Context, handle uint64, query string, offset
 			if readErr != nil && readErr != io.EOF {
 				return -1, readErr
 			}
-			limit := min(n, int(end-start))
-			if at := bytes.LastIndex(buffer[:limit], needle); at >= 0 {
+			_, at := scanSearchMatches(buffer[:n], matcher, int(end-start))
+			if at >= 0 {
 				return start + int64(at), nil
 			}
 			end = start
@@ -367,7 +430,7 @@ func (s *LogStore) StartFind(handle uint64, query string, offset int64, previous
 	id := s.next
 	s.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
-	job := &logSearch{id: id, cancel: cancel, result: LogSearchResult{Offset: -1}}
+	job := &logSearch{id: id, cancel: cancel, finished: make(chan struct{}), result: LogSearchResult{Offset: -1}}
 	e.mu.Lock()
 	if e.file == nil {
 		e.mu.Unlock()
@@ -380,6 +443,7 @@ func (s *LogStore) StartFind(handle uint64, query string, offset int64, previous
 	e.search = job
 	e.mu.Unlock()
 	go func() {
+		defer close(job.finished)
 		found, err := s.find(ctx, handle, query, offset, previous)
 		job.mu.Lock()
 		job.result = LogSearchResult{Done: true, Offset: found}
@@ -421,6 +485,129 @@ func (s *LogStore) CancelFind(handle, id uint64) error {
 	return nil
 }
 
+func (s *LogStore) StartCount(handle uint64, query string) (uint64, error) {
+	matcher, matchBytes, err := logSearchPattern(query)
+	if err != nil {
+		return 0, err
+	}
+	info, err := s.Stat(handle)
+	if err != nil {
+		return 0, err
+	}
+	e, err := s.entry(handle)
+	if err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	s.next++
+	id := s.next
+	s.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	job := &logCount{id: id, cancel: cancel, finished: make(chan struct{}), matcher: matcher, matchBytes: matchBytes, size: info.Size, revision: info.Revision, ordinalOffset: -1}
+	e.mu.Lock()
+	if e.file == nil {
+		e.mu.Unlock()
+		cancel()
+		return 0, errors.New("log handle is closed")
+	}
+	if e.count != nil {
+		e.count.cancel()
+	}
+	e.count = job
+	e.mu.Unlock()
+	go func() {
+		defer close(job.finished)
+		buffer := make([]byte, logSearchSize+matchBytes-1)
+		for start := int64(0); start < info.Size; start += logSearchSize {
+			if err := ctx.Err(); err != nil {
+				return
+			}
+			length := min(int64(len(buffer)), info.Size-start)
+			n, err := readSearchBlock(e, info.Revision, buffer[:length], start)
+			if err != nil && err != io.EOF || int64(n) != length {
+				job.mu.Lock()
+				job.err = "log changed during search"
+				if err != nil && err != io.EOF {
+					job.err = err.Error()
+				}
+				job.done = true
+				job.mu.Unlock()
+				return
+			}
+			starts := int(min(int64(logSearchSize), info.Size-start))
+			count, _ := scanSearchMatches(buffer[:n], matcher, starts)
+			job.mu.Lock()
+			job.counts = append(job.counts, count)
+			job.total += count
+			job.mu.Unlock()
+		}
+		job.mu.Lock()
+		job.done = true
+		job.mu.Unlock()
+	}()
+	return id, nil
+}
+
+func (s *LogStore) PollCount(handle, id uint64, offset int64) (LogCountResult, error) {
+	e, err := s.entry(handle)
+	if err != nil {
+		return LogCountResult{}, err
+	}
+	e.mu.Lock()
+	job := e.count
+	e.mu.Unlock()
+	if job == nil || job.id != id {
+		return LogCountResult{}, errors.New("count is no longer active")
+	}
+	job.mu.Lock()
+	result := LogCountResult{Done: job.done, Total: job.total, Error: job.err}
+	if offset < 0 || offset >= job.size {
+		job.mu.Unlock()
+		return result, nil
+	}
+	block := int(offset / logSearchSize)
+	if block >= len(job.counts) {
+		job.mu.Unlock()
+		return result, nil
+	}
+	if job.ordinalOffset == offset {
+		result.Ordinal = job.ordinal
+		job.mu.Unlock()
+		return result, nil
+	}
+	for _, count := range job.counts[:block] {
+		result.Ordinal += count
+	}
+	job.mu.Unlock()
+	start := int64(block) * logSearchSize
+	length := min(job.size-start, offset-start+int64(job.matchBytes))
+	buffer := make([]byte, length)
+	n, readErr := readSearchBlock(e, job.revision, buffer, start)
+	if readErr != nil && readErr != io.EOF || int64(n) != length {
+		return LogCountResult{}, errors.New("log changed during search")
+	}
+	count, _ := scanSearchMatches(buffer, job.matcher, int(offset-start)+1)
+	result.Ordinal += count
+	job.mu.Lock()
+	job.ordinalOffset, job.ordinal = offset, result.Ordinal
+	job.mu.Unlock()
+	return result, nil
+}
+
+func (s *LogStore) CancelCount(handle, id uint64) error {
+	e, err := s.entry(handle)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	if e.count != nil && (id == 0 || e.count.id == id) {
+		e.count.cancel()
+		e.count = nil
+	}
+	e.mu.Unlock()
+	return nil
+}
+
 func readSearchBlock(e *logEntry, revision uint64, buffer []byte, offset int64) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -446,6 +633,9 @@ func (s *LogStore) Close(handle uint64) error {
 	if e.search != nil {
 		e.search.cancel()
 	}
+	if e.count != nil {
+		e.count.cancel()
+	}
 	f := e.file
 	e.file = nil
 	return f.Close()
@@ -461,6 +651,9 @@ func (s *LogStore) CloseAll() error {
 		e.mu.Lock()
 		if e.search != nil {
 			e.search.cancel()
+		}
+		if e.count != nil {
+			e.count.cancel()
 		}
 		if e.file != nil {
 			result = errors.Join(result, e.file.Close())

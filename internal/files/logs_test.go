@@ -206,8 +206,264 @@ func TestLogSearchJobAndCancellation(t *testing.T) {
 	}
 }
 
+func waitLogCount(t *testing.T, s *LogStore, handle, id uint64, offset int64) LogCountResult {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		result, err := s.PollCount(handle, id, offset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Done {
+			return result
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("count did not finish")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestLogCountMatchesOverlapsAndBlockBoundary(t *testing.T) {
+	content := "aaaa\n" + strings.Repeat("x", logSearchSize-8) + "aaaabc\naaaa\n"
+	s, info := testLog(t, content)
+	id, err := s.StartCount(info.Handle, "aaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, offset := range []int64{0, 1, logSearchSize - 3, logSearchSize - 2, int64(len(content) - 5), int64(len(content) - 4)} {
+		found, err := s.Find(info.Handle, "aaa", offset, false)
+		if err != nil || found != offset {
+			t.Fatalf("find at %d = %d, %v", offset, found, err)
+		}
+	}
+	for _, offset := range []int64{1, logSearchSize - 2, int64(len(content) - 4)} {
+		previous, err := s.Find(info.Handle, "aaa", offset, true)
+		if err != nil || previous != offset-1 {
+			t.Fatalf("previous at %d = %d, %v", offset, previous, err)
+		}
+	}
+	result := waitLogCount(t, s, info.Handle, id, int64(len(content)-4))
+	if result.Error != "" || result.Total != 6 || result.Ordinal != 6 {
+		t.Fatalf("count: %#v", result)
+	}
+	first, err := s.PollCount(info.Handle, id, 1)
+	if err != nil || first.Ordinal != 2 {
+		t.Fatalf("first overlap: %#v, %v", first, err)
+	}
+}
+
+func TestLogSearchCaseInsensitiveNavigationAndCount(t *testing.T) {
+	content := "aAaA A.B a.b АБВ абв K K\n"
+	s, info := testLog(t, content)
+	for _, test := range []struct {
+		query   string
+		offsets []int64
+	}{
+		{"AaA", []int64{0, 1}},
+		{"a.b", []int64{5, 9}},
+		{"абв", []int64{13, 20}},
+		{"k", []int64{27, 31}},
+	} {
+		id, err := s.StartCount(info.Handle, test.query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index, offset := range test.offsets {
+			found, err := s.Find(info.Handle, test.query, offset, false)
+			if err != nil || found != offset {
+				t.Fatalf("%q next at %d = %d, %v", test.query, offset, found, err)
+			}
+			result := waitLogCount(t, s, info.Handle, id, offset)
+			if result.Error != "" || result.Total != int64(len(test.offsets)) || result.Ordinal != int64(index+1) {
+				t.Fatalf("%q count at %d: %#v", test.query, offset, result)
+			}
+		}
+		previous, err := s.Find(info.Handle, test.query, test.offsets[1], true)
+		if err != nil || previous != test.offsets[0] {
+			t.Fatalf("%q previous = %d, %v", test.query, previous, err)
+		}
+	}
+}
+
+func TestLogSearchCaseFoldedUTF8AcrossBlockBoundary(t *testing.T) {
+	content := strings.Repeat("x", logSearchSize-1) + "K\nK\n"
+	s, info := testLog(t, content)
+	id, err := s.StartCount(info.Handle, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, offset := range []int64{logSearchSize - 1, logSearchSize + 3} {
+		found, err := s.Find(info.Handle, "k", offset, false)
+		if err != nil || found != offset {
+			t.Fatalf("next at %d = %d, %v", offset, found, err)
+		}
+		result := waitLogCount(t, s, info.Handle, id, offset)
+		if result.Error != "" || result.Total != 2 || result.Ordinal != int64(index+1) {
+			t.Fatalf("count at %d: %#v", offset, result)
+		}
+	}
+	previous, err := s.Find(info.Handle, "k", logSearchSize+3, true)
+	if err != nil || previous != logSearchSize-1 {
+		t.Fatalf("previous = %d, %v", previous, err)
+	}
+}
+
+func TestLogCountUTF8AndFileChanges(t *testing.T) {
+	s, info := testLog(t, "ααα\n")
+	id, err := s.StartCount(info.Handle, "αα")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := waitLogCount(t, s, info.Handle, id, 2)
+	if result.Total != 2 || result.Ordinal != 2 {
+		t.Fatalf("UTF-8 count: %#v", result)
+	}
+	f, err := os.OpenFile(info.Path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("αα\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	grown, err := s.Stat(info.Handle)
+	if err != nil || grown.Size <= info.Size || grown.Revision != info.Revision {
+		t.Fatalf("append: %#v, %v", grown, err)
+	}
+	newID, err := s.StartCount(info.Handle, "αα")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = waitLogCount(t, s, info.Handle, newID, int64(len("ααα\n")))
+	if result.Total != 3 || result.Ordinal != 3 {
+		t.Fatalf("appended count: %#v", result)
+	}
+	if err := os.Truncate(info.Path, 2); err != nil {
+		t.Fatal(err)
+	}
+	truncated, err := s.Stat(info.Handle)
+	if err != nil || truncated.Revision == grown.Revision {
+		t.Fatalf("truncate: %#v, %v", truncated, err)
+	}
+	if err := s.CancelCount(info.Handle, newID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PollCount(info.Handle, newID, 0); err == nil {
+		t.Fatal("cancelled count is still active")
+	}
+}
+
+func TestLogCountCancelAndClose(t *testing.T) {
+	s, info := testLog(t, strings.Repeat("needle\n", 1<<18))
+	id, err := s.StartCount(info.Handle, "needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.entry(info.Handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	firstJob := e.count
+	e.mu.Unlock()
+	if err := s.CancelCount(info.Handle, id); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstJob.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled count goroutine did not stop")
+	}
+	if _, err := s.PollCount(info.Handle, id, 0); err == nil {
+		t.Fatal("cancelled count is still active")
+	}
+	id, err = s.StartCount(info.Handle, "needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	secondJob := e.count
+	e.mu.Unlock()
+	searchID, err := s.StartFind(info.Handle, "missing", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.mu.Lock()
+	searchJob := e.search
+	e.mu.Unlock()
+	if err := s.Close(info.Handle); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-secondJob.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closed count goroutine did not stop")
+	}
+	select {
+	case <-searchJob.finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closed navigation goroutine did not stop")
+	}
+	if _, err := s.PollCount(info.Handle, id, 0); err == nil {
+		t.Fatal("closed count is still active")
+	}
+	if _, err := s.PollFind(info.Handle, searchID); err == nil {
+		t.Fatal("closed navigation is still active")
+	}
+}
+
+func TestLogNavigationRunsWhileCounting(t *testing.T) {
+	s, info := testLog(t, "needle\n"+strings.Repeat("other\n", 1<<18))
+	countID, err := s.StartCount(info.Handle, "needle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchID, err := s.StartFind(info.Handle, "needle", 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		result, err := s.PollFind(info.Handle, searchID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Done {
+			if result.Error != "" || result.Offset != 0 {
+				t.Fatalf("navigation: %#v", result)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("navigation waited for count")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := s.PollCount(info.Handle, countID, 0); err != nil {
+		t.Fatalf("navigation cancelled count: %v", err)
+	}
+	newID, err := s.StartCount(info.Handle, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PollCount(info.Handle, countID, 0); err == nil {
+		t.Fatal("new query kept the old count active")
+	}
+	if result := waitLogCount(t, s, info.Handle, newID, -1); result.Total != 1<<18 {
+		t.Fatalf("new query count: %#v", result)
+	}
+}
+
 func TestLogReplacementInvalidatesRevision(t *testing.T) {
 	s, info := testLog(t, "old\n")
+	oldCount, err := s.StartCount(info.Handle, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := waitLogCount(t, s, info.Handle, oldCount, 0); result.Total != 1 {
+		t.Fatalf("old count: %#v", result)
+	}
 	replacement := filepath.Join(filepath.Dir(info.Path), "new.log")
 	if err := os.WriteFile(replacement, []byte("new\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -224,6 +480,13 @@ func TestLogReplacementInvalidatesRevision(t *testing.T) {
 	changed, err := s.Stat(info.Handle)
 	if err != nil || changed.Revision == info.Revision {
 		t.Fatalf("changed: %#v, %v", changed, err)
+	}
+	newCount, err := s.StartCount(info.Handle, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := waitLogCount(t, s, info.Handle, newCount, -1); result.Total != 0 {
+		t.Fatalf("replacement count: %#v", result)
 	}
 	chunk, err := s.Read(info.Handle, 0, false)
 	if err != nil || len(chunk.Lines) != 1 || chunk.Lines[0].Text != "new" {

@@ -49,6 +49,7 @@ export function App() {
   const [editorLine, setEditorLine] = useState(1)
   const [previewLine, setPreviewLine] = useState<number>()
   const [message, setMessage] = useState('')
+  const [logPosition, setLogPosition] = useState<{ id: string; offset: number }>()
   const [updateState, setUpdateState] = useState<UpdateState>('idle')
   const [updateMessage, setUpdateMessage] = useState('')
   const keyChordRef = useRef(false)
@@ -79,6 +80,10 @@ export function App() {
   const previewSource = useDebounced(active?.content ?? '', 100)
   const persistedSplit = useDebounced(splitPercent, 300)
   const anyDirty = documents.some(isDirty)
+  const onLogPosition = useCallback((offset: number) => {
+    if (activeIDRef.current !== active?.id) return
+    setLogPosition((current) => current?.id === active.id && current.offset === offset ? current : { id: active.id, offset })
+  }, [active?.id])
 
   const setActivePane = useCallback((pane: ActivePane) => {
     activePaneRef.current = pane
@@ -558,11 +563,11 @@ export function App() {
         </div>
       </div>
       <main className={`workspace workspace--${activeViewMode}`}>
-        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined} onPointerDownCapture={() => setActivePane('editor')} onFocusCapture={() => setActivePane('editor')}>{active.log ? <LogViewer key={active.id} ref={logViewerRef} info={active.log} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} onInfo={(info) => setDocuments((current) => current.map((item) => item.id === active.id ? { ...item, log: info, modifiedNs: info.modifiedNs } : item))} onError={setMessage} /> : <MarkdownEditor ref={markdownEditorRef} value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} />}</section>}
+        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined} onPointerDownCapture={() => setActivePane('editor')} onFocusCapture={() => setActivePane('editor')}>{active.log ? <LogViewer key={active.id} ref={logViewerRef} info={active.log} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} onInfo={(info) => setDocuments((current) => current.map((item) => item.id === active.id ? { ...item, log: info, modifiedNs: info.modifiedNs } : item))} onPosition={onLogPosition} onError={setMessage} /> : <MarkdownEditor ref={markdownEditorRef} value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} />}</section>}
         {activeViewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
         {activeViewMode !== 'editor' && <section className="preview-pane" onPointerDownCapture={() => setActivePane('preview')} onFocusCapture={() => setActivePane('preview')}><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={(file) => { void addFile(file).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error))) }} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
       </main>
-      <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>{logDocument ? 'Log' : 'Markdown'} · UTF-8</span></footer>
+      <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>{active.log ? `Byte ${(logPosition?.id === active.id ? logPosition.offset : 0).toLocaleString()} / ${active.log.size.toLocaleString()} · Log · UTF-8` : 'Markdown · UTF-8'}</span></footer>
     </div>
   )
 }

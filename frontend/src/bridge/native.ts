@@ -8,6 +8,7 @@ export interface LogInfo { handle: number; path: string; name: string; size: num
 export interface LogLine { offset: number; next: number; text: string; truncated: boolean }
 export interface LogChunk { lines: LogLine[]; next: number; size: number; revision: number }
 export interface LogSearchResult { done: boolean; offset: number; error?: string }
+export interface LogCountResult { done: boolean; total: number; ordinal: number; error?: string }
 
 export interface FileState { exists: boolean; modifiedNs: number }
 export interface ContextMenuOptions {
@@ -55,6 +56,9 @@ declare global {
     FindLog(handle: number, query: string, offset: number, previous: boolean): Promise<number>
     PollLogSearch(handle: number, id: number): Promise<LogSearchResult>
     CancelLogSearch(handle: number, id: number): Promise<void>
+    CountLogMatches(handle: number, query: string): Promise<number>
+    PollLogCount(handle: number, id: number, offset: number): Promise<LogCountResult>
+    CancelLogCount(handle: number, id: number): Promise<void>
     CloseLog(handle: number): Promise<void>
     SaveFile(path: string, content: string): Promise<MarkdownFile>
     SaveFileAs(content: string): Promise<MarkdownFile | null>
@@ -93,6 +97,9 @@ export const native = {
   findLog: (handle: number, query: string, offset: number, previous: boolean) => window.FindLog(handle, query, offset, previous),
   pollLogSearch: (handle: number, id: number) => window.PollLogSearch(handle, id),
   cancelLogSearch: (handle: number, id = 0) => window.CancelLogSearch(handle, id),
+  countLogMatches: (handle: number, query: string) => window.CountLogMatches(handle, query),
+  pollLogCount: (handle: number, id: number, offset = -1) => window.PollLogCount(handle, id, offset),
+  cancelLogCount: (handle: number, id = 0) => window.CancelLogCount(handle, id),
   closeLog: (handle: number) => window.CloseLog(handle),
   saveFile: (path: string, content: string) => window.SaveFile(path, content),
   saveFileAs: (content: string) => window.SaveFileAs(content),
