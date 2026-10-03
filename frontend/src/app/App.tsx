@@ -49,6 +49,7 @@ export function App() {
   const [editorLine, setEditorLine] = useState(1)
   const [previewLine, setPreviewLine] = useState<number>()
   const [message, setMessage] = useState('')
+  const [savingLogJob, setSavingLogJob] = useState<{ handle: number; id: number }>()
   const [logPosition, setLogPosition] = useState<{ id: string; offset: number }>()
   const [updateState, setUpdateState] = useState<UpdateState>('idle')
   const [updateMessage, setUpdateMessage] = useState('')
@@ -59,6 +60,7 @@ export function App() {
   const settingsOpenRef = useRef(settingsOpen)
   const markdownEditorRef = useRef<MarkdownEditorHandle>(null)
   const logViewerRef = useRef<LogViewerHandle>(null)
+  const savingLogsRef = useRef(new Set<number>())
   const activePaneRef = useRef<ActivePane>('editor')
   const browserFindEnabledRef = useRef(false)
   const documentsRef = useRef(documents)
@@ -287,7 +289,34 @@ export function App() {
   }
 
   const saveDocument = async (document: DocumentState, saveAs = false): Promise<boolean> => {
-    if (document.log) return false
+    if (document.log) {
+      const handle = document.log.handle
+      if (savingLogsRef.current.has(handle)) return false
+      savingLogsRef.current.add(handle)
+      if (activeIDRef.current === document.id) logViewerRef.current?.setSaving(true)
+      try {
+        if (activeIDRef.current === document.id) await logViewerRef.current?.flush()
+        const id = saveAs ? await native.startLogSaveAs(handle) : await native.startLogSave(handle)
+        if (id === null) return false
+        setSavingLogJob({ handle, id })
+        for (;;) {
+          const result = await native.pollLogSave(handle, id)
+          if (result.error) throw new Error(result.error)
+          if (result.done) {
+            if (!result.info) throw new Error('Saved log metadata is missing')
+            const info = result.info
+            setDocuments((current) => current.map((item) => item.id === document.id ? { ...item, path: info.path, name: info.name, modifiedNs: info.modifiedNs, log: info } : item))
+            setMessage(`Saved ${info.name}`)
+            return true
+          }
+          setMessage(`Saving ${document.name}: ${Math.round(result.written / Math.max(1, result.total) * 100)}%`)
+          await new Promise((resolve) => window.setTimeout(resolve, 100))
+        }
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : String(error))
+        return false
+      } finally { savingLogsRef.current.delete(handle); setSavingLogJob((current) => current?.handle === handle ? undefined : current); if (activeIDRef.current === document.id) logViewerRef.current?.setSaving(false) }
+    }
     try {
       const file = requiresSaveAs(document, saveAs)
         ? await native.saveFileAs(document.content)
@@ -379,7 +408,7 @@ export function App() {
       const shortcutActive = activeDocument(documentsRef.current, activeIDRef.current)
       if (match.command === 'new-document') { const document = newDocument(); setDocuments((current) => [...current, document]); setActiveID(document.id) }
       else if (match.command === 'open-document') { void openFile() }
-      else if (match.command === 'save' || match.command === 'save-as') { if (shortcutActive && !shortcutActive.log) void saveDocument(shortcutActive, match.command === 'save-as') }
+      else if (match.command === 'save' || match.command === 'save-as') { if (shortcutActive) void saveDocument(shortcutActive, match.command === 'save-as') }
       else if (match.command === 'show-split') { if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('split') }
       else if (match.command === 'show-preview') { if (!shortcutActive || !isLogDocument(shortcutActive)) setViewMode('preview') }
       else if (match.command === 'monaco-find' || match.command === 'monaco-replace') { if (shortcutActive?.log) { if (match.command === 'monaco-find') logViewerRef.current?.showFind() } else markdownEditorRef.current?.showFind(match.command === 'monaco-replace') }
@@ -469,8 +498,9 @@ export function App() {
         <span className="titlebar__name">Symmd</span>
         <nav className="titlebar__menu" onPointerDown={(event) => event.stopPropagation()}>
           <button onClick={() => void openFile()}>Open</button>
-          <button disabled={logDocument} onClick={() => void saveDocument(active)}>Save</button>
-          <button disabled={logDocument} onClick={() => void saveDocument(active, true)}>Save As</button>
+          <button onClick={() => void saveDocument(active)}>Save</button>
+          <button onClick={() => void saveDocument(active, true)}>Save As</button>
+          {savingLogJob && <button onClick={() => void native.cancelLogSave(savingLogJob.handle, savingLogJob.id)}>Cancel Save</button>}
         </nav>
         <div className="titlebar__controls" onPointerDown={(event) => event.stopPropagation()}>
           <button
@@ -563,7 +593,7 @@ export function App() {
         </div>
       </div>
       <main className={`workspace workspace--${activeViewMode}`}>
-        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined} onPointerDownCapture={() => setActivePane('editor')} onFocusCapture={() => setActivePane('editor')}>{active.log ? <LogViewer key={active.id} ref={logViewerRef} info={active.log} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} onInfo={(info) => setDocuments((current) => current.map((item) => item.id === active.id ? { ...item, log: info, modifiedNs: info.modifiedNs } : item))} onPosition={onLogPosition} onError={setMessage} /> : <MarkdownEditor ref={markdownEditorRef} value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} />}</section>}
+        {activeViewMode !== 'preview' && <section className="editor-pane" style={activeViewMode === 'split' ? { width: `${splitPercent}%` } : undefined} onPointerDownCapture={() => setActivePane('editor')} onFocusCapture={() => setActivePane('editor')}>{active.log ? <LogViewer key={active.id} ref={logViewerRef} info={active.log} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} onInfo={(info) => setDocuments((current) => current.map((item) => item.id === active.id && (!item.log || info.revision >= item.log.revision) ? { ...item, log: info, modifiedNs: info.modifiedNs } : item))} onPosition={onLogPosition} onError={setMessage} /> : <MarkdownEditor ref={markdownEditorRef} value={active.content} onChange={updateActiveContent} onScrollLine={setEditorLine} revealLine={preferences.previewSync ? previewLine : undefined} theme={preferences.theme} fontSize={preferences.fontSize} wordWrap={preferences.wordWrap} language={languageForDocument(active)} />}</section>}
         {activeViewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
         {activeViewMode !== 'editor' && <section className="preview-pane" onPointerDownCapture={() => setActivePane('preview')} onFocusCapture={() => setActivePane('preview')}><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={(file) => { void addFile(file).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error))) }} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
       </main>

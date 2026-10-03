@@ -25,6 +25,7 @@ type LogInfo struct {
 	Size       int64  `json:"size"`
 	ModifiedNS int64  `json:"modifiedNs"`
 	Revision   uint64 `json:"revision"`
+	Dirty      bool   `json:"dirty"`
 }
 
 type LogLine struct {
@@ -42,12 +43,23 @@ type LogChunk struct {
 }
 
 type logEntry struct {
-	mu       sync.Mutex
-	file     *os.File
-	info     LogInfo
-	identity os.FileInfo
-	search   *logSearch
-	count    *logCount
+	mu           sync.Mutex
+	file         *os.File
+	info         LogInfo
+	identity     os.FileInfo
+	search       *logSearch
+	count        *logCount
+	root         *logNode
+	saved        *logNode
+	history      []*logNode
+	historyAt    int
+	seed         uint64
+	add          *os.File
+	addPath      string
+	snapshotSize int64
+	snapshotNS   int64
+	conflict     bool
+	saving       *logSave
 }
 
 type logSearch struct {
@@ -121,7 +133,13 @@ func (s *LogStore) Open(path string) (LogInfo, error) {
 	if s.entries == nil {
 		s.entries = make(map[uint64]*logEntry)
 	}
-	s.entries[info.Handle] = &logEntry{file: f, info: info, identity: stat}
+	e := &logEntry{file: f, info: info, identity: stat, snapshotSize: stat.Size(), snapshotNS: stat.ModTime().UnixNano()}
+	if stat.Size() > 0 {
+		e.root = e.newLogNode(logPiece{length: stat.Size()})
+	}
+	e.saved = e.root
+	e.history = []*logNode{e.root}
+	s.entries[info.Handle] = e
 	return info, nil
 }
 
@@ -152,6 +170,13 @@ func (s *LogStore) Stat(handle uint64) (LogInfo, error) {
 	if !stat.Mode().IsRegular() {
 		return LogInfo{}, errors.New("log is not a regular file")
 	}
+	if len(e.history) > 1 || e.info.Dirty || e.add != nil {
+		if !os.SameFile(e.identity, stat) || stat.Size() != e.snapshotSize || stat.ModTime().UnixNano() != e.snapshotNS {
+			e.conflict = true
+		}
+		return e.info, nil
+	}
+	changed := false
 	if !os.SameFile(e.identity, stat) {
 		if e.search != nil {
 			e.search.cancel()
@@ -169,8 +194,10 @@ func (s *LogStore) Stat(handle uint64) (LogInfo, error) {
 		}
 		e.file, e.identity = f, stat
 		e.info.Revision++
+		changed = true
 	} else if stat.Size() < e.info.Size || (stat.Size() == e.info.Size && stat.ModTime().UnixNano() != e.info.ModifiedNS) {
 		e.info.Revision++
+		changed = true
 		if e.search != nil {
 			e.search.cancel()
 		}
@@ -179,6 +206,16 @@ func (s *LogStore) Stat(handle uint64) (LogInfo, error) {
 		}
 	}
 	e.info.Size, e.info.ModifiedNS = stat.Size(), stat.ModTime().UnixNano()
+	e.snapshotSize, e.snapshotNS = stat.Size(), stat.ModTime().UnixNano()
+	if changed || logLength(e.root) != stat.Size() {
+		e.root = nil
+		if stat.Size() > 0 {
+			e.root = e.newLogNode(logPiece{length: stat.Size()})
+		}
+		e.saved = e.root
+		e.history = []*logNode{e.root}
+		e.historyAt = 0
+	}
 	return e.info, nil
 }
 
@@ -213,7 +250,7 @@ func (s *LogStore) Read(handle uint64, offset int64, align bool) (LogChunk, erro
 			back = logReadSize
 		}
 		previous := make([]byte, back)
-		if _, err := e.file.ReadAt(previous, offset-back); err != nil && err != io.EOF {
+		if _, err := e.readLogicalAt(previous, offset-back); err != nil && err != io.EOF {
 			return LogChunk{}, err
 		}
 		if at := bytes.LastIndexByte(previous, '\n'); at >= 0 && len(previous)-at-1 <= logLineLimit {
@@ -223,13 +260,13 @@ func (s *LogStore) Read(handle uint64, offset int64, align bool) (LogChunk, erro
 	partial := false
 	if offset > 0 {
 		previous := []byte{0}
-		if _, err := e.file.ReadAt(previous, offset-1); err != nil && err != io.EOF {
+		if _, err := e.readLogicalAt(previous, offset-1); err != nil && err != io.EOF {
 			return LogChunk{}, err
 		}
 		partial = previous[0] != '\n'
 	}
 	data := make([]byte, min(int64(logReadSize), size-offset))
-	n, err := e.file.ReadAt(data, offset)
+	n, err := e.readLogicalAt(data, offset)
 	if err != nil && err != io.EOF {
 		return LogChunk{}, err
 	}
@@ -289,7 +326,7 @@ func (s *LogStore) ReadBefore(handle uint64, offset int64) (LogChunk, error) {
 	}
 	start := max(int64(0), offset-logReadSize)
 	data := make([]byte, offset-start)
-	n, err := e.file.ReadAt(data, start)
+	n, err := e.readLogicalAt(data, start)
 	if err != nil && err != io.EOF {
 		return LogChunk{}, err
 	}
@@ -617,7 +654,7 @@ func readSearchBlock(e *logEntry, revision uint64, buffer []byte, offset int64) 
 	if e.info.Revision != revision {
 		return 0, errors.New("log changed during search")
 	}
-	return e.file.ReadAt(buffer, offset)
+	return e.readLogicalAt(buffer, offset)
 }
 
 func (s *LogStore) Close(handle uint64) error {
@@ -629,16 +666,30 @@ func (s *LogStore) Close(handle uint64) error {
 		return nil
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if e.search != nil {
 		e.search.cancel()
 	}
 	if e.count != nil {
 		e.count.cancel()
 	}
+	job := e.saving
+	if job != nil {
+		job.cancel()
+	}
+	e.mu.Unlock()
+	if job != nil {
+		<-job.finished
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	f := e.file
 	e.file = nil
-	return f.Close()
+	err := f.Close()
+	if e.add != nil {
+		err = errors.Join(err, e.add.Close(), os.Remove(e.addPath))
+		e.add = nil
+	}
+	return err
 }
 
 func (s *LogStore) CloseAll() error {
@@ -655,9 +706,22 @@ func (s *LogStore) CloseAll() error {
 		if e.count != nil {
 			e.count.cancel()
 		}
+		job := e.saving
+		if job != nil {
+			job.cancel()
+		}
+		e.mu.Unlock()
+		if job != nil {
+			<-job.finished
+		}
+		e.mu.Lock()
 		if e.file != nil {
 			result = errors.Join(result, e.file.Close())
 			e.file = nil
+		}
+		if e.add != nil {
+			result = errors.Join(result, e.add.Close(), os.Remove(e.addPath))
+			e.add = nil
 		}
 		e.mu.Unlock()
 	}

@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, u
 import { native, type LogChunk, type LogCountResult, type LogInfo } from '../bridge/native'
 import * as monaco from '../editor/monaco'
 import { logTokenRules } from '../editor/logLanguage'
+import { LogEditorWindow, type LogEditorWindowHandle } from './LogEditorWindow'
 import { appendLogChunk, logGutterWidth, logTextMatches, prependLogChunk, visibleLogLines, visibleLogOffset, visualLogRows, type LogTextMatch, type VisualLogRow } from './viewport'
 
 const logTopPadding = 12
@@ -109,6 +110,8 @@ function highlighted(row: VisualLogRow, cache: Map<string, monaco.Token[]>, matc
 export interface LogViewerHandle {
   showFind(): void
   findNext(previous: boolean): void
+  flush(): Promise<void>
+  setSaving(saving: boolean): void
 }
 
 interface Props { info: LogInfo; theme: 'dark' | 'light'; fontSize: number; wordWrap: boolean; onInfo(info: LogInfo): void; onPosition(offset: number): void; onError(message: string): void }
@@ -129,6 +132,9 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   const [countVersion, setCountVersion] = useState(0)
   const [dragPosition, setDragPosition] = useState<number>()
   const [endSelected, setEndSelected] = useState(false)
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  const [editorPosition, setEditorPosition] = useState(0)
+  const editorRef = useRef<LogEditorWindowHandle>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
@@ -160,7 +166,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   const visiblePosition = visibleLogOffset(rows, Math.max(0, scrollTop - logTopPadding), rowHeight, chunk?.next ?? 0)
   visibleOffsetRef.current = visiblePosition
   matchRef.current = matchOffset
-  useEffect(() => { onPosition(visiblePosition) }, [onPosition, visiblePosition])
+  useEffect(() => { if (navigationOpen) onPosition(visiblePosition) }, [onPosition, visiblePosition, navigationOpen])
   const layoutRef = useRef({ rows, wordWrap, columns, rowHeight })
 
   useLayoutEffect(() => {
@@ -314,6 +320,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
       setMatchOffset(result.offset)
       matchRef.current = result.offset
       await load(result.offset, true, false, false, { offset: result.offset, query })
+      await editorRef.current?.seek(result.offset)
     } catch (error) {
       if (request === searchSerial.current) onError(error instanceof Error ? error.message : String(error))
     }
@@ -360,6 +367,10 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   }, [findOpen, query, info.size, countResult?.done])
 
   useEffect(() => {
+    if (chunkRef.current && chunkRef.current.revision !== info.revision) void load(Math.min(editorPosition, info.size), true)
+  }, [info.revision])
+
+  useEffect(() => {
     if (!countID || countIDRef.current !== countID) return
     void native.pollLogCount(info.handle, countID, matchOffset ?? -1).then((result) => {
       if (countIDRef.current === countID && matchRef.current === matchOffset) { setCountResult(result); setCountOffset(matchOffset) }
@@ -369,13 +380,15 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   useImperativeHandle(ref, () => ({
     showFind: () => { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()) },
     findNext: (previous) => { void find(previous) },
+    flush: () => editorRef.current?.flush() ?? Promise.resolve(),
+    setSaving: (saving) => editorRef.current?.setSaving(saving),
   }))
 
   const { first, visible } = visibleLogLines(rows, scrollTop, height, rowHeight)
   const tokenCache = new Map<string, monaco.Token[]>()
   const matchCache = new Map<number, LogTextMatch[]>()
   const atEnd = (endSelected || scrollTop > 0) && chunk?.next === info.size && scrollTop + height >= rows.length * rowHeight + logTopPadding - 1
-  const position = dragPosition ?? (atEnd ? 1 : Math.max(0, Math.min(1, visiblePosition / Math.max(1, info.size))))
+  const position = dragPosition ?? (navigationOpen && atEnd ? 1 : Math.max(0, Math.min(1, (navigationOpen ? visiblePosition : editorPosition) / Math.max(1, info.size))))
   const trackHeight = trackRef.current?.clientHeight ?? height
 
   const showPrevious = () => {
@@ -442,13 +455,18 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     }
   }
 
-  const seekGlobal = (fraction: number) => load(fraction >= 1 ? Math.max(0, info.size - 65536) : Math.floor(info.size * fraction), true, fraction >= 1)
+  const seekGlobal = (fraction: number) => {
+    const target = fraction >= 1 ? info.size : Math.floor(info.size * fraction)
+    void editorRef.current?.seek(target).catch((error: unknown) => onError(error instanceof Error ? error.message : String(error)))
+    return load(fraction >= 1 ? Math.max(0, info.size - 65536) : target, true, fraction >= 1)
+  }
   const pointerPosition = (clientY: number, track: HTMLDivElement, grab: number) => {
     const travel = Math.max(1, track.clientHeight - globalThumbHeight)
     return Math.max(0, Math.min(1, (clientY - track.getBoundingClientRect().top - grab) / travel))
   }
 
   return <div className={`log-viewer log-viewer--${theme}${wordWrap ? ' log-viewer--wrap' : ''}`} style={{ fontSize, '--log-gutter-width': `${gutterWidth}px`, '--log-top-padding': `${logTopPadding}px`, '--log-text-padding': `${logTextPadding}px`, '--log-global-thumb-height': `${globalThumbHeight}px` } as CSSProperties}>
+    <div className="log-editor-toolbar"><button type="button" onClick={() => setNavigationOpen((open) => !open)}>{navigationOpen ? 'Hide navigation' : 'Show navigation'}</button><span>Select All applies to the current 2 MiB editor window</span></div>
     {findOpen && <div className="log-find" onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setFindOpen(false); scrollRef.current?.focus() } }}>
       <input ref={findRef} aria-label="Find in log" value={query} onChange={(event) => { searchSerial.current++; void native.cancelLogSearch(info.handle).catch(() => undefined); setQuery(event.target.value); setMatchOffset(undefined); matchRef.current = undefined; setCountResult(undefined); setCountOffset(undefined); setStatus('') }} onKeyDown={(event) => { if (event.key === 'Enter') void find(event.shiftKey) }} />
       <span className="log-find__count" title={countResult?.error}>{countResult?.error ? 'Error' : status || <>{matchOffset === undefined ? 0 : countOffset === matchOffset ? countResult?.ordinal || '…' : '…'} / {countResult?.done ? countResult.total : '…'}</>}</span>
@@ -457,7 +475,8 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
       <button type="button" className="log-find__icon" aria-label="Close find" title="Close find" onClick={() => { setFindOpen(false); scrollRef.current?.focus() }}>×</button>
     </div>}
     <div className="log-body">
-    <div ref={scrollRef} className="log-scroll" tabIndex={0} onScroll={(event) => {
+    <div className="log-content">
+    <div ref={scrollRef} className="log-scroll" style={{ display: navigationOpen ? undefined : 'none' }} tabIndex={0} onScroll={(event) => {
       const host = event.currentTarget
       setScrollTop(host.scrollTop)
       if (host.scrollTop + host.clientHeight < host.scrollHeight - rowHeight) setEndSelected(false)
@@ -483,9 +502,11 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     }}>
       <div style={{ height: rows.length * rowHeight, position: 'relative' }}>
         <div style={{ position: 'absolute', top: first * rowHeight, left: 0, right: 0 }}>
-          {visible.map((row) => <div className={`log-row${row.overflow ? ' log-row--overflow' : ''}`} data-log-offset={row.line.offset} key={`${row.line.offset}:${row.part}`} style={{ height: rowHeight }}><span className="log-offset">{row.part === 0 ? row.line.offset.toLocaleString() : ''}</span><span className="log-text">{highlighted(row, tokenCache, matchCache, query, matchOffset)}{row.last && row.line.truncated && <span className="log-truncated"> [line truncated]</span>}</span></div>)}
+          {visible.map((row) => <div className={`log-row${row.overflow ? ' log-row--overflow' : ''}`} data-log-offset={row.line.offset} key={`${row.line.offset}:${row.part}`} style={{ height: rowHeight }} onClick={() => { void editorRef.current?.seek(row.line.offset); setNavigationOpen(false) }}><span className="log-offset">{row.part === 0 ? row.line.offset.toLocaleString() : ''}</span><span className="log-text">{highlighted(row, tokenCache, matchCache, query, matchOffset)}{row.last && row.line.truncated && <span className="log-truncated"> [line truncated]</span>}</span></div>)}
         </div>
       </div>
+    </div>
+    <LogEditorWindow ref={editorRef} info={info} theme={theme} fontSize={fontSize} wordWrap={wordWrap} onInfo={(next) => { if (next.revision !== infoRef.current.revision) searchSerial.current++; infoRef.current = next; setMatchOffset(undefined); onInfo(next) }} onPosition={(offset) => { setEditorPosition(offset); onPosition(offset) }} onPendingEdit={() => onInfo({ ...infoRef.current, dirty: true })} onError={onError} />
     </div>
     <div ref={trackRef} className="log-global-scroll" role="scrollbar" aria-label="Log position" aria-orientation="vertical" aria-valuemin={0} aria-valuemax={info.size} aria-valuenow={Math.round(position * info.size)} tabIndex={0} onPointerDown={(event) => {
       if (event.button !== 0) return

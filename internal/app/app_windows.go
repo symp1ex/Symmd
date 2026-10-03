@@ -196,7 +196,15 @@ func (a *Application) bind() error {
 		{"OpenLog", a.logs.Open},
 		{"ReadLog", a.logs.Read},
 		{"ReadLogBefore", a.logs.ReadBefore},
+		{"ReadLogWindow", a.logs.ReadWindow},
 		{"StatLog", a.logs.Stat},
+		{"ReplaceLog", a.logs.Replace},
+		{"UndoLog", a.logs.Undo},
+		{"RedoLog", a.logs.Redo},
+		{"StartLogSave", a.logs.StartSave},
+		{"StartLogSaveAs", a.startLogSaveAs},
+		{"PollLogSave", a.logs.PollSave},
+		{"CancelLogSave", a.logs.CancelSave},
 		{"FindLog", a.logs.StartFind},
 		{"PollLogSearch", a.logs.PollFind},
 		{"CancelLogSearch", a.logs.CancelFind},
@@ -394,6 +402,16 @@ func (a *Application) saveFileAs(content string) (*files.MarkdownFile, error) {
 		return nil, err
 	}
 	return &file, nil
+}
+
+func (a *Application) startLogSaveAs(handle uint64) (*uint64, error) {
+	info, err := a.logs.Stat(handle)
+	if err != nil { return nil, err }
+	path, cancelled, err := window.SaveLogFile(a.hwnd, info.Path, a.logger.Debugf)
+	if err != nil || cancelled { return nil, err }
+	id, err := a.logs.StartSave(handle, path)
+	if err != nil { return nil, err }
+	return &id, nil
 }
 
 func (a *Application) setDirty(dirty bool) { a.mu.Lock(); a.dirty = dirty; a.mu.Unlock() }

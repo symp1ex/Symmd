@@ -4,11 +4,13 @@ export interface MarkdownFile {
   content: string
   modifiedNs: number
 }
-export interface LogInfo { handle: number; path: string; name: string; size: number; modifiedNs: number; revision: number }
+export interface LogInfo { handle: number; path: string; name: string; size: number; modifiedNs: number; revision: number; dirty: boolean }
 export interface LogLine { offset: number; next: number; text: string; truncated: boolean }
 export interface LogChunk { lines: LogLine[]; next: number; size: number; revision: number }
 export interface LogSearchResult { done: boolean; offset: number; error?: string }
 export interface LogCountResult { done: boolean; total: number; ordinal: number; error?: string }
+export interface LogWindow { offset: number; text: string; size: number; revision: number; editable: boolean }
+export interface LogSaveResult { done: boolean; written: number; total: number; error?: string; info?: LogInfo }
 
 export interface FileState { exists: boolean; modifiedNs: number }
 export interface ContextMenuOptions {
@@ -52,7 +54,15 @@ declare global {
     OpenLog(path: string): Promise<LogInfo>
     ReadLog(handle: number, offset: number, align: boolean): Promise<LogChunk>
     ReadLogBefore(handle: number, offset: number): Promise<LogChunk>
+    ReadLogWindow(handle: number, offset: number): Promise<LogWindow>
     StatLog(handle: number): Promise<LogInfo>
+    ReplaceLog(handle: number, start: number, end: number, text: string): Promise<LogInfo>
+    UndoLog(handle: number): Promise<LogInfo>
+    RedoLog(handle: number): Promise<LogInfo>
+    StartLogSave(handle: number, destination: string): Promise<number>
+    StartLogSaveAs(handle: number): Promise<number | null>
+    PollLogSave(handle: number, id: number): Promise<LogSaveResult>
+    CancelLogSave(handle: number, id: number): Promise<void>
     FindLog(handle: number, query: string, offset: number, previous: boolean): Promise<number>
     PollLogSearch(handle: number, id: number): Promise<LogSearchResult>
     CancelLogSearch(handle: number, id: number): Promise<void>
@@ -93,7 +103,15 @@ export const native = {
   openLog: (path: string) => window.OpenLog(path),
   readLog: (handle: number, offset: number, align = false) => window.ReadLog(handle, offset, align),
   readLogBefore: (handle: number, offset: number) => window.ReadLogBefore(handle, offset),
+  readLogWindow: (handle: number, offset: number) => window.ReadLogWindow(handle, offset),
   statLog: (handle: number) => window.StatLog(handle),
+  replaceLog: (handle: number, start: number, end: number, text: string) => window.ReplaceLog(handle, start, end, text),
+  undoLog: (handle: number) => window.UndoLog(handle),
+  redoLog: (handle: number) => window.RedoLog(handle),
+  startLogSave: (handle: number) => window.StartLogSave(handle, ''),
+  startLogSaveAs: (handle: number) => window.StartLogSaveAs(handle),
+  pollLogSave: (handle: number, id: number) => window.PollLogSave(handle, id),
+  cancelLogSave: (handle: number, id: number) => window.CancelLogSave(handle, id),
   findLog: (handle: number, query: string, offset: number, previous: boolean) => window.FindLog(handle, query, offset, previous),
   pollLogSearch: (handle: number, id: number) => window.PollLogSearch(handle, id),
   cancelLogSearch: (handle: number, id = 0) => window.CancelLogSearch(handle, id),

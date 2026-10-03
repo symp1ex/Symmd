@@ -24,6 +24,44 @@ export function utf8ByteOffsetToStringIndex(text: string, byteOffset: number): n
   return bytes === byteOffset ? text.length : undefined
 }
 
+export function stringIndexToUtf8ByteOffset(text: string, index: number): number | undefined {
+  if (index < 0 || index > text.length) return undefined
+  if (index > 0 && index < text.length && text.charCodeAt(index) >= 0xdc00 && text.charCodeAt(index) <= 0xdfff) return undefined
+  return new TextEncoder().encode(text.slice(0, index)).length
+}
+
+export function normalizeLogWindowText(text: string): string {
+  return text.replace(/\r\n?|\n/g, '\n')
+}
+
+export function preferredLogEOL(text: string): '\r\n' | '\n' {
+  return text.includes('\r\n') && !text.replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n'
+}
+
+export function modelIndexToRawStringIndex(raw: string, index: number): number | undefined {
+  if (index < 0) return undefined
+  let model = 0
+  let position = 0
+  while (position < raw.length && model < index) {
+    if (raw[position] === '\r' && raw[position + 1] === '\n') position++
+    position++
+    model++
+  }
+  return model === index ? position : undefined
+}
+
+export function rawStringIndexToModelIndex(raw: string, index: number): number | undefined {
+  if (index < 0 || index > raw.length) return undefined
+  let model = 0
+  for (let position = 0; position < index; position++, model++) {
+    if (raw[position] === '\r' && raw[position + 1] === '\n') {
+      if (position + 1 === index) return undefined
+      position++
+    }
+  }
+  return model
+}
+
 export interface LogTextMatch { start: number; end: number; selected: boolean }
 
 export function logTextMatches(line: LogLine, query: string, selectedOffset?: number): LogTextMatch[] {

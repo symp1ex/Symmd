@@ -12,6 +12,11 @@ let visualLogRows
 let visibleLogOffset
 let logGutterWidth
 let utf8ByteOffsetToStringIndex
+let stringIndexToUtf8ByteOffset
+let normalizeLogWindowText
+let preferredLogEOL
+let modelIndexToRawStringIndex
+let rawStringIndexToModelIndex
 let logTextMatches
 let maxWrappedRows
 let classifyLogFragment
@@ -19,7 +24,7 @@ let logLanguage
 
 before(async () => {
   server = await createServer({ root: fileURLToPath(new URL('../', import.meta.url)), configFile: false, appType: 'custom', logLevel: 'silent', server: { middlewareMode: true } })
-  ;({ visibleLogLines, appendLogChunk, prependLogChunk, visualLogRows, visibleLogOffset, logGutterWidth, utf8ByteOffsetToStringIndex, logTextMatches, maxWrappedRows } = await server.ssrLoadModule('/src/log/viewport.ts'))
+  ;({ visibleLogLines, appendLogChunk, prependLogChunk, visualLogRows, visibleLogOffset, logGutterWidth, utf8ByteOffsetToStringIndex, stringIndexToUtf8ByteOffset, normalizeLogWindowText, preferredLogEOL, modelIndexToRawStringIndex, rawStringIndexToModelIndex, logTextMatches, maxWrappedRows } = await server.ssrLoadModule('/src/log/viewport.ts'))
   ;({ classifyLogFragment, logLanguage } = await server.ssrLoadModule('/src/editor/logLanguage.ts'))
 })
 
@@ -89,6 +94,29 @@ test('search maps UTF-8 byte offsets to exact UTF-16 matches', () => {
     { start: 2, end: 5, selected: false },
     { start: 6, end: 9, selected: true },
   ])
+})
+
+test('editor ranges map UTF-16 boundaries to UTF-8 bytes above 4 GiB', () => {
+  const text = 'AЖ😀z'
+  const base = 50 * 1024 ** 3
+  assert.equal(base + stringIndexToUtf8ByteOffset(text, 1), base + 1)
+  assert.equal(base + stringIndexToUtf8ByteOffset(text, 2), base + 3)
+  assert.equal(base + stringIndexToUtf8ByteOffset(text, 4), base + 7)
+  assert.equal(stringIndexToUtf8ByteOffset(text, 3), undefined)
+  assert.equal(utf8ByteOffsetToStringIndex(text, 7), 4)
+})
+
+test('mixed CRLF and LF Monaco positions map to original byte ranges', () => {
+  const raw = 'Ж\r\n😀\nend\r\n'
+  assert.equal(normalizeLogWindowText(raw), 'Ж\n😀\nend\n')
+  const modelIndex = 5 // after the emoji and LF in normalized text
+  const rawIndex = modelIndexToRawStringIndex(raw, modelIndex)
+  assert.equal(rawIndex, 6)
+  assert.equal(stringIndexToUtf8ByteOffset(raw, rawIndex), 9)
+  assert.equal(rawStringIndexToModelIndex(raw, rawIndex), modelIndex)
+  assert.equal(rawStringIndexToModelIndex(raw, 2), undefined) // between CR and LF
+  assert.equal(preferredLogEOL('a\r\nb\r\n'), '\r\n')
+  assert.equal(preferredLogEOL(raw), '\n')
 })
 
 test('search keeps overlapping and wrapped matches, including a selected match beyond the display cap', () => {

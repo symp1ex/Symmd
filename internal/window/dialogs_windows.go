@@ -68,6 +68,11 @@ func SaveMarkdownFile(owner uintptr, suggestedPath string, logf DialogLogFunc) (
 	return saveMarkdownFile(owner, suggestedPath, logf)
 }
 
+func SaveLogFile(owner uintptr, suggestedPath string, logf DialogLogFunc) (string, bool, error) {
+	filter := append(utf16.Encode([]rune("Log files (*.log)\x00*.log\x00All files (*.*)\x00*.*\x00")), 0)
+	return fileDialog(owner, true, suggestedPath, "Save log file", filter, "log", false, logf)
+}
+
 func saveMarkdownFile(owner uintptr, suggestedPath string, logf DialogLogFunc) (string, bool, error) {
 	return markdownDialog(owner, true, suggestedPath, "Save Markdown file", logf)
 }

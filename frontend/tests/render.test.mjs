@@ -553,6 +553,12 @@ test('saves the latest active document and keeps saved metadata and dirty state 
   assert.equal(isDirty(saved[0]), true)
 })
 
+test('log dirty state follows the backend edit model', () => {
+  const document = { id: 'log', path: 'C:\\logs\\large.log', name: 'large.log', content: '', savedContent: '', modifiedNs: 1, log: { handle: 1, size: 50 * 1024 ** 3, revision: 2, dirty: true } }
+  assert.equal(isDirty(document), true)
+  assert.equal(isDirty({ ...document, log: { ...document.log, dirty: false } }), false)
+})
+
 test('routes Ctrl+S and Ctrl+Shift+S to Save or Save As from document state', () => {
   const existing = { id: 'existing', path: 'C:\\notes\\file.md', name: 'file.md', content: 'changed', savedContent: 'old', modifiedNs: 1 }
   const unsaved = { ...existing, id: 'new', path: '', name: 'Untitled.md', modifiedNs: 0 }
