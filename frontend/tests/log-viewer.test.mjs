@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { createServer } from 'vite'
 
 let server
@@ -169,6 +170,38 @@ test('search selection boundaries follow the actual Unicode match in a raw edito
     assert.equal(rawStringIndexToModelIndex(text, match.end), normalizeLogWindowText(text).indexOf(fragment) + fragment.length)
   }
   assert.equal(logTextMatches({ ...line, text: text.slice(0, -1), next: line.next - 1 }, 'end', base + stringIndexToUtf8ByteOffset(text, text.indexOf('end'))).some((item) => item.selected), false)
+})
+
+test('find navigation wraps in both directions and reports only a genuinely missing match', async () => {
+  const source = ts.createSourceFile('LogViewer.tsx', readFileSync(new URL('../src/log/LogViewer.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  let declaration
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'find') declaration = node
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  assert.ok(declaration)
+  const code = ts.transpileModule(`const ${declaration.getText(source)}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const makeFind = new Function('native', 'info', 'query', 'findRef', 'searchSerial', 'matchOffset', 'visibleOffsetRef', 'infoRef', 'setStatus', 'setFindOpen', 'setMatchOffset', 'matchRef', 'load', 'editorRef', 'onError', 'window', `${code}\nreturn find`)
+  const run = async (previous, matchOffset, size, results) => {
+    const calls = []
+    const selected = []
+    let status
+    const native = {
+      findLog: async (_handle, _query, offset, backwards) => { calls.push([offset, backwards]); return calls.length },
+      pollLogSearch: async (_handle, id) => ({ done: true, offset: results[id - 1] }),
+      cancelLogSearch: async () => {},
+    }
+    const find = makeFind(native, { handle: 1 }, 'k', { current: null }, { current: 0 }, matchOffset, { current: 0 }, { current: { size } }, (value) => { status = value }, () => {}, (value) => selected.push(value), { current: undefined }, async () => {}, { current: { seek: async (offset) => selected.push(offset) } }, (error) => { throw error }, {})
+    await find(previous)
+    return { calls, selected, status }
+  }
+  assert.deepEqual(await run(true, 10, 100, [-1, 80]), { calls: [[10, true], [100, true]], selected: [80, 80], status: '' })
+  assert.deepEqual(await run(false, 80, 100, [-1, 10]), { calls: [[81, false], [0, false]], selected: [10, 10], status: '' })
+  assert.deepEqual(await run(false, 10, 100, [20]), { calls: [[11, false]], selected: [20, 20], status: '' })
+  assert.deepEqual(await run(true, 10, 100, [-1, 10]), { calls: [[10, true], [100, true]], selected: [10, 10], status: '' })
+  assert.deepEqual(await run(false, 80, 100, [-1, -1]), { calls: [[81, false], [0, false]], selected: [], status: 'No match' })
+  assert.deepEqual(await run(false, undefined, 100, [-1]), { calls: [[0, false]], selected: [], status: 'No match' })
 })
 
 test('Monaco scroll, search selection, clear, and right-edge hit areas stay locally wired', () => {

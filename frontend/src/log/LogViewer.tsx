@@ -308,22 +308,27 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     const start = matchOffset === undefined ? visibleOffsetRef.current : matchOffset + (previous ? 0 : 1)
     setStatus('')
     try {
-      const id = await native.findLog(info.handle, query, start, previous)
-      if (request !== searchSerial.current) { void native.cancelLogSearch(info.handle, id).catch(() => undefined); return }
-      let result = await native.pollLogSearch(info.handle, id)
-      while (!result.done && request === searchSerial.current) {
-        await new Promise((resolve) => window.setTimeout(resolve, 80))
+      const wrapStart = previous ? infoRef.current.size : 0
+      for (const searchStart of start === wrapStart ? [start] : [start, wrapStart]) {
+        const id = await native.findLog(info.handle, query, searchStart, previous)
+        if (request !== searchSerial.current) { void native.cancelLogSearch(info.handle, id).catch(() => undefined); return }
+        let result = await native.pollLogSearch(info.handle, id)
+        while (!result.done && request === searchSerial.current) {
+          await new Promise((resolve) => window.setTimeout(resolve, 80))
+          if (request !== searchSerial.current) return
+          result = await native.pollLogSearch(info.handle, id)
+        }
+        if (result.error) throw new Error(result.error)
         if (request !== searchSerial.current) return
-        result = await native.pollLogSearch(info.handle, id)
+        if (result.offset < 0) continue
+        setMatchOffset(result.offset)
+        matchRef.current = result.offset
+        await load(result.offset, true, false, false, { offset: result.offset, query, searchRequest: request })
+        if (request !== searchSerial.current) return
+        await editorRef.current?.seek(result.offset, query)
+        return
       }
-      if (result.error) throw new Error(result.error)
-      if (request !== searchSerial.current) return
-      if (result.offset < 0) { setStatus('No match'); return }
-      setMatchOffset(result.offset)
-      matchRef.current = result.offset
-      await load(result.offset, true, false, false, { offset: result.offset, query, searchRequest: request })
-      if (request !== searchSerial.current) return
-      await editorRef.current?.seek(result.offset, query)
+      setStatus('No match')
     } catch (error) {
       if (request === searchSerial.current) onError(error instanceof Error ? error.message : String(error))
     }
