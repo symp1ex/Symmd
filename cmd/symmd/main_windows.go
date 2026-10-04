@@ -9,7 +9,7 @@ import (
 	"github.com/symp1ex/symmd/internal/webassets"
 )
 
-const version = "v0.2.4.4"
+const version = "v0.2.4.8"
 
 func main() {
 	initial, err := app.LoadInitial(os.Args[1:])

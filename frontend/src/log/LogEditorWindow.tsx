@@ -1,12 +1,13 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import { native, type LogInfo, type LogWindow } from '../bridge/native'
 import * as monaco from '../editor/monaco'
-import { modelIndexToRawStringIndex, normalizeLogWindowText, preferredLogEOL, rawStringIndexToModelIndex, stringIndexToUtf8ByteOffset, utf8ByteOffsetToStringIndex } from './viewport'
+import { logTextMatches, modelIndexToRawStringIndex, normalizeLogWindowText, preferredLogEOL, rawStringIndexToModelIndex, stringIndexToUtf8ByteOffset, utf8ByteOffsetToStringIndex } from './viewport'
 
 const maxLogWindowBytes = 2 << 20
 
 export interface LogEditorWindowHandle {
-  seek(offset: number): Promise<void>
+  seek(offset: number, searchQuery?: string): Promise<void>
+  clearSearchSelection(): void
   flush(): Promise<void>
   focus(): void
   setSaving(saving: boolean): void
@@ -37,16 +38,30 @@ export const LogEditorWindow = forwardRef<LogEditorWindowHandle, Props>(function
   const displayEditableRef = useRef(false)
   const pendingErrorRef = useRef<Error | null>(null)
   const windowBytesRef = useRef(0)
+  const lastScrollPositionRef = useRef<monaco.IPosition | undefined>(undefined)
+  const searchSelectionRef = useRef<monaco.Range | undefined>(undefined)
+  const searchRequestRef = useRef(0)
   const callbacksRef = useRef({ onInfo, onPosition, onPendingEdit, onError })
   callbacksRef.current = { onInfo, onPosition, onPendingEdit, onError }
 
-  const seek = async (target: number) => {
+  const positionOffset = (position: monaco.IPosition) => {
+    const window = windowRef.current
+    const model = editorRef.current?.getModel()
+    if (!window || !model) return
+    const index = model.getOffsetAt(position)
+    const rawIndex = modelIndexToRawStringIndex(rawRef.current, index)
+    const bytes = rawIndex === undefined ? undefined : stringIndexToUtf8ByteOffset(rawRef.current, rawIndex)
+    return bytes === undefined ? undefined : { index, logical: window.offset + bytes }
+  }
+
+  const seek = async (target: number, searchQuery?: string) => {
     const request = ++loadingRef.current
+    const searchRequest = searchRequestRef.current
     let pending: Promise<void>
     do { pending = pendingRef.current; await pending } while (pending !== pendingRef.current)
     const window = await native.readLogWindow(info.handle, Math.max(0, target))
-    if (request !== loadingRef.current) return
-    if (pending !== pendingRef.current) { void seek(target); return }
+    if (request !== loadingRef.current || (searchQuery && searchRequest !== searchRequestRef.current)) return
+    if (pending !== pendingRef.current) { void seek(target, searchQuery); return }
     const editor = editorRef.current
     const model = editor?.getModel()
     if (!editor || !model) return
@@ -67,9 +82,22 @@ export const LogEditorWindow = forwardRef<LogEditorWindowHandle, Props>(function
     let rawIndex = utf8ByteOffsetToStringIndex(window.text, byteOffset) ?? 0
     if (rawIndex > 0 && window.text[rawIndex - 1] === '\r' && window.text[rawIndex] === '\n') rawIndex--
     const relative = rawStringIndexToModelIndex(window.text, rawIndex) ?? 0
-    editor.setPosition(model.getPositionAt(relative))
-    editor.revealPositionInCenter(model.getPositionAt(relative))
+    const start = model.getPositionAt(relative)
+    const selected = searchQuery ? logTextMatches({ offset: window.offset, next: window.offset + windowBytesRef.current, text: window.text, truncated: false }, searchQuery, target).find((match) => match.selected) : undefined
+    const selectedStart = selected ? rawStringIndexToModelIndex(window.text, selected.start) : undefined
+    const end = selected ? rawStringIndexToModelIndex(window.text, selected.end) : undefined
+    if (selectedStart !== undefined && end !== undefined) {
+      const range = monaco.Range.fromPositions(model.getPositionAt(selectedStart), model.getPositionAt(end))
+      searchSelectionRef.current = range
+      editor.setSelection(range)
+      editor.revealRangeInCenter(range)
+    } else {
+      searchSelectionRef.current = undefined
+      editor.setPosition(start)
+      editor.revealPositionInCenter(start)
+    }
     suppressRef.current = false
+    lastScrollPositionRef.current = undefined
     callbacksRef.current.onPosition(target)
     if (!displayEditableRef.current && window.editable) callbacksRef.current.onError('This window cannot be mapped to original byte offsets and is view-only')
     else if (!window.editable) callbacksRef.current.onError('This window contains invalid UTF-8 or an external conflict and is view-only')
@@ -78,6 +106,16 @@ export const LogEditorWindow = forwardRef<LogEditorWindowHandle, Props>(function
 
   useImperativeHandle(ref, () => ({
     seek,
+    clearSearchSelection: () => {
+      searchRequestRef.current++
+      const editor = editorRef.current
+      const selection = editor?.getSelection()
+      if (searchSelectionRef.current && selection?.equalsRange(searchSelectionRef.current)) {
+        suppressRef.current = true
+        try { editor?.setPosition(selection.getStartPosition()) } finally { suppressRef.current = false }
+      }
+      searchSelectionRef.current = undefined
+    },
     flush: async () => { let pending: Promise<void>; do { pending = pendingRef.current; await pending } while (pending !== pendingRef.current); if (pendingErrorRef.current) throw pendingErrorRef.current },
     focus: () => editorRef.current?.focus(),
     setSaving: (saving) => { savingRef.current = saving; editorRef.current?.updateOptions({ readOnly: saving || !displayEditableRef.current }) },
@@ -148,15 +186,24 @@ export const LogEditorWindow = forwardRef<LogEditorWindowHandle, Props>(function
     const cursor = editor.onDidChangeCursorPosition((event) => {
       if (suppressRef.current || !windowRef.current) return
       const window = windowRef.current
-      const index = editor.getModel()?.getOffsetAt(event.position) ?? 0
-      const rawIndex = modelIndexToRawStringIndex(rawRef.current, index)
-      const bytes = rawIndex === undefined ? undefined : stringIndexToUtf8ByteOffset(rawRef.current, rawIndex)
-      if (bytes === undefined) return
-      const logical = window.offset + bytes
+      const offset = positionOffset(event.position)
+      if (!offset) return
+      const { index, logical } = offset
+      lastScrollPositionRef.current = undefined
       callbacksRef.current.onPosition(logical)
       if (textRef.current.length > 65536 && ((index > textRef.current.length - 2048 && window.offset + windowBytesRef.current < window.size) || (index < 2048 && window.offset > 0))) {
         void seek(logical).catch((error: unknown) => callbacksRef.current.onError(error instanceof Error ? error.message : String(error)))
       }
+    })
+    const scroll = editor.onDidScrollChange((event) => {
+      if (!event.scrollTopChanged || suppressRef.current) return
+      const position = editor.getVisibleRanges()[0]?.getStartPosition()
+      const previous = lastScrollPositionRef.current
+      if (!position || position.lineNumber === previous?.lineNumber && position.column === previous?.column) return
+      const offset = positionOffset(position)
+      if (!offset) return
+      lastScrollPositionRef.current = position
+      callbacksRef.current.onPosition(offset.logical)
     })
     const keydown = (event: KeyboardEvent) => {
       if (!event.ctrlKey || event.altKey || event.metaKey || !['KeyZ', 'KeyY'].includes(event.code)) return
@@ -196,7 +243,7 @@ export const LogEditorWindow = forwardRef<LogEditorWindowHandle, Props>(function
     void seek(0).catch((error: unknown) => callbacksRef.current.onError(error instanceof Error ? error.message : String(error)))
     return () => {
       loadingRef.current++
-      content.dispose(); cursor.dispose()
+      content.dispose(); cursor.dispose(); scroll.dispose()
       host.removeEventListener('keydown', keydown, true)
       host.removeEventListener('contextmenu', menu, true)
       host.removeEventListener('paste', paste, true)

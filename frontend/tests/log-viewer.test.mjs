@@ -156,6 +156,59 @@ test('search highlights case-insensitive literal matches at UTF-8 byte offsets',
   ])
 })
 
+test('search selection boundaries follow the actual Unicode match in a raw editor window', () => {
+  const text = '😀\r\nКирилл K end'
+  const base = 50 * 1024 ** 3
+  const line = { offset: base, next: base + stringIndexToUtf8ByteOffset(text, text.length), text, truncated: false }
+  for (const [query, fragment] of [['😀', '😀'], ['кирилл', 'Кирилл'], ['k', 'K'], ['end', 'end']]) {
+    const start = text.indexOf(fragment)
+    const byteOffset = base + stringIndexToUtf8ByteOffset(text, start)
+    const match = logTextMatches(line, query, byteOffset).find((item) => item.selected)
+    assert.deepEqual([match?.start, match?.end], [start, start + fragment.length])
+    assert.equal(rawStringIndexToModelIndex(text, match.start), normalizeLogWindowText(text).indexOf(fragment))
+    assert.equal(rawStringIndexToModelIndex(text, match.end), normalizeLogWindowText(text).indexOf(fragment) + fragment.length)
+  }
+  assert.equal(logTextMatches({ ...line, text: text.slice(0, -1), next: line.next - 1 }, 'end', base + stringIndexToUtf8ByteOffset(text, text.indexOf('end'))).some((item) => item.selected), false)
+})
+
+test('Monaco scroll, search selection, clear, and right-edge hit areas stay locally wired', () => {
+  const editor = readFileSync(new URL('../src/log/LogEditorWindow.tsx', import.meta.url), 'utf8')
+  const viewer = readFileSync(new URL('../src/log/LogViewer.tsx', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../src/styles/app.css', import.meta.url), 'utf8')
+  const scroll = editor.match(/const scroll = editor\.onDidScrollChange\([\s\S]*?\n    \}\)/)?.[0]
+  assert.ok(scroll)
+  assert.match(scroll, /event\.scrollTopChanged/)
+  assert.match(scroll, /getVisibleRanges\(\)/)
+  assert.match(scroll, /positionOffset\(position\)/)
+  assert.match(scroll, /callbacksRef\.current\.onPosition\(offset\.logical\)/)
+  assert.doesNotMatch(scroll, /\bseek\(/)
+  assert.match(editor, /scroll\.dispose\(\)/)
+  assert.match(editor, /modelIndexToRawStringIndex\(rawRef\.current, index\)/)
+  assert.match(editor, /stringIndexToUtf8ByteOffset\(rawRef\.current, rawIndex\)/)
+  assert.match(editor, /searchQuery \? logTextMatches\(/)
+  assert.match(editor, /editor\.setSelection\(range\)/)
+  assert.match(editor, /editor\.revealRangeInCenter\(range\)/)
+  assert.match(editor, /\} else \{\s*searchSelectionRef\.current = undefined\s*editor\.setPosition\(start\)/)
+  assert.match(editor, /searchQuery && searchRequest !== searchRequestRef\.current/)
+  assert.match(editor, /selection\?\.equalsRange\(searchSelectionRef\.current\)/)
+  assert.match(viewer, /editorRef\.current\?\.seek\(result\.offset, query\)/)
+  assert.match(viewer, /reveal\.searchRequest !== searchSerial\.current/)
+  assert.match(viewer, /editorRef\.current\?\.seek\(target\)/)
+  assert.match(viewer, /onChange=\{\(event\) => updateQuery\(event\.target\.value\)\}/)
+  assert.ok(/\{query && <button[^>]*aria-label="Clear search"[\s\S]*?updateQuery\(''\); findRef\.current\?\.focus\(\)/.test(viewer))
+  assert.match(viewer, /searchSerial\.current\+\+[\s\S]*?native\.cancelLogSearch\(info\.handle\)/)
+  assert.match(viewer, /editorRef\.current\?\.clearSearchSelection\(\)/)
+  assert.match(viewer, /if \(!query\) \{ setFindOpen\(true\); findRef\.current\?\.focus\(\); return \}/)
+  const track = css.match(/\.log-global-scroll \{([^}]+)\}/)?.[1]
+  const thumb = css.match(/\.log-global-thumb \{([^}]+)\}/)?.[1]
+  const resize = css.match(/\.resize-handle--left, \.resize-handle--right \{([^}]+)\}/)?.[1]
+  const find = css.match(/\.log-find \{([^}]+)\}/)?.[1]
+  const pixels = (style, property) => Number(style.match(new RegExp(`${property}: (\\d+)px`))?.[1])
+  assert.ok(pixels(track, 'width') - pixels(thumb, 'left') - pixels(thumb, 'right') >= 12)
+  assert.ok(pixels(track, 'margin-right') >= pixels(resize, 'width'))
+  assert.ok(pixels(find, 'right') > pixels(track, 'width') + pixels(track, 'margin-right'))
+})
+
 test('pathological lines have bounded visual rows, cache, and DOM window', () => {
   const line = (offset) => ({ offset, next: offset + 16384, text: 'x'.repeat(16384), truncated: true })
   const first = { lines: Array.from({ length: 120 }, (_, i) => line(i * 16384)), next: 120 * 16384, size: 1e9, revision: 1 }

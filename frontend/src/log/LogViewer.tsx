@@ -193,12 +193,13 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     setCharWidth(context.measureText('M').width || fontSize * 0.602)
   }, [fontSize])
 
-  const load = async (offset: number, align = false, bottom = false, append = false, reveal?: { offset: number; query: string }) => {
+  const load = async (offset: number, align = false, bottom = false, append = false, reveal?: { offset: number; query: string; searchRequest: number }) => {
     const request = ++serial.current
     loading.current = true
     try {
       const result = bottom && !append ? await native.readLogBefore(info.handle, infoRef.current.size) : await native.readLog(info.handle, Math.max(0, offset), align)
       if (request !== serial.current) return
+      if (reveal && reveal.searchRequest !== searchSerial.current) return
       if (result.revision !== infoRef.current.revision || result.size !== infoRef.current.size) {
         const next = await native.statLog(info.handle)
         if (request !== serial.current) return
@@ -235,10 +236,11 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
       suppressScroll.current = true
       requestAnimationFrame(() => {
         if (request !== serial.current || !scrollRef.current) return
+        if (reveal && reveal.searchRequest !== searchSerial.current) { suppressScroll.current = false; return }
         scrollRef.current.scrollTop = nextScrollTop === null ? scrollRef.current.scrollHeight : Math.max(0, nextScrollTop)
         setScrollTop(scrollRef.current.scrollTop)
         if (reveal) requestAnimationFrame(() => {
-          if (request === serial.current) scrollRef.current?.querySelector<HTMLElement>('.log-match--selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+          if (request === serial.current && reveal.searchRequest === searchSerial.current) scrollRef.current?.querySelector<HTMLElement>('.log-match--selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
         })
         window.setTimeout(() => { if (request === serial.current) suppressScroll.current = false }, 100)
       })
@@ -319,11 +321,24 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
       if (result.offset < 0) { setStatus('No match'); return }
       setMatchOffset(result.offset)
       matchRef.current = result.offset
-      await load(result.offset, true, false, false, { offset: result.offset, query })
-      await editorRef.current?.seek(result.offset)
+      await load(result.offset, true, false, false, { offset: result.offset, query, searchRequest: request })
+      if (request !== searchSerial.current) return
+      await editorRef.current?.seek(result.offset, query)
     } catch (error) {
       if (request === searchSerial.current) onError(error instanceof Error ? error.message : String(error))
     }
+  }
+
+  const updateQuery = (value: string) => {
+    searchSerial.current++
+    void native.cancelLogSearch(info.handle).catch(() => undefined)
+    editorRef.current?.clearSearchSelection()
+    setQuery(value)
+    setMatchOffset(undefined)
+    matchRef.current = undefined
+    setCountResult(undefined)
+    setCountOffset(undefined)
+    setStatus('')
   }
 
   useEffect(() => {
@@ -468,7 +483,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   return <div className={`log-viewer log-viewer--${theme}${wordWrap ? ' log-viewer--wrap' : ''}`} style={{ fontSize, '--log-gutter-width': `${gutterWidth}px`, '--log-top-padding': `${logTopPadding}px`, '--log-text-padding': `${logTextPadding}px`, '--log-global-thumb-height': `${globalThumbHeight}px` } as CSSProperties}>
     <div className="log-editor-toolbar"><button type="button" onClick={() => setNavigationOpen((open) => !open)}>{navigationOpen ? 'Hide navigation' : 'Show navigation'}</button><span>Select All applies to the current 2 MiB editor window</span></div>
     {findOpen && <div className="log-find" onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setFindOpen(false); scrollRef.current?.focus() } }}>
-      <input ref={findRef} aria-label="Find in log" value={query} onChange={(event) => { searchSerial.current++; void native.cancelLogSearch(info.handle).catch(() => undefined); setQuery(event.target.value); setMatchOffset(undefined); matchRef.current = undefined; setCountResult(undefined); setCountOffset(undefined); setStatus('') }} onKeyDown={(event) => { if (event.key === 'Enter') void find(event.shiftKey) }} />
+      <span className="log-find__field"><input ref={findRef} aria-label="Find in log" value={query} onChange={(event) => updateQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void find(event.shiftKey) }} />{query && <button type="button" className="log-find__clear" aria-label="Clear search" title="Clear search" onClick={() => { updateQuery(''); findRef.current?.focus() }}>×</button>}</span>
       <span className="log-find__count" title={countResult?.error}>{countResult?.error ? 'Error' : status || <>{matchOffset === undefined ? 0 : countOffset === matchOffset ? countResult?.ordinal || '…' : '…'} / {countResult?.done ? countResult.total : '…'}</>}</span>
       <button type="button" className="log-find__icon" aria-label="Next match" title="Next match" onClick={() => void find(false)}>↓</button>
       <button type="button" className="log-find__icon" aria-label="Previous match" title="Previous match" onClick={() => void find(true)}>↑</button>

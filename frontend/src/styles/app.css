@@ -70,12 +70,16 @@ button { color: inherit; font: inherit; }
 .workspace--split .preview-pane { flex: 1; }
 .editor-host { position: absolute; inset: 0; }
 .log-viewer { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; color: #d4d4d4; background: #1e1e1e; color-scheme: dark; font-family: Consolas, monospace; }
-.log-find { position: absolute; z-index: 1; top: 8px; right: 18px; box-sizing: border-box; width: 432px; max-width: calc(100% - 30px); display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid #454545; border-radius: 3px; background: #252526; box-shadow: 0 2px 8px #0006; font: 12px "Segoe UI", sans-serif; }
+.log-find { position: absolute; z-index: 1; top: 8px; right: 30px; box-sizing: border-box; width: 432px; max-width: calc(100% - 30px); display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid #454545; border-radius: 3px; background: #252526; box-shadow: 0 2px 8px #0006; font: 12px "Segoe UI", sans-serif; }
 .log-find button { padding: 2px 7px; border: 1px solid #454545; border-radius: 2px; color: inherit; background: #2d2d30; cursor: pointer; }
 .log-find button.log-find__icon { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; padding: 0; font: 17px "Segoe UI Symbol", "Segoe UI", sans-serif; }
 .log-find button:hover { background: #3a3d41; }
 .log-find button:focus-visible, .log-find input:focus-visible, .log-global-scroll:focus-visible { outline: 1px solid #007acc; }
 .log-find input { min-width: 0; flex: 1; padding: 2px 5px; border: 1px solid #555; border-radius: 2px; color: inherit; background: #3c3c3c; }
+.log-find__field { position: relative; display: flex; flex: 1; min-width: 0; }
+.log-find__field input { width: 100%; padding-right: 27px; }
+.log-find button.log-find__clear { position: absolute; top: 2px; bottom: 2px; right: 2px; width: 22px; padding: 0; border: 0; background: transparent; }
+.log-find button.log-find__clear:hover { background: #3a3d41; }
 .log-find__count { flex: 0 0 100px; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .log-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .log-editor-toolbar { display: flex; align-items: center; gap: 12px; padding: 3px 8px; font: 11px "Segoe UI", sans-serif; }
@@ -88,8 +92,8 @@ button { color: inherit; font: inherit; }
 .log-scroll::-webkit-scrollbar-track { background: #1e1e1e; }
 .log-scroll::-webkit-scrollbar-thumb { background: #5f5f5f; border: 3px solid #1e1e1e; border-radius: 7px; }
 .log-scroll::-webkit-scrollbar-thumb:hover { background: #777; }
-.log-global-scroll { position: relative; width: 14px; flex: 0 0 14px; background: #1e1e1e; cursor: default; touch-action: none; }
-.log-global-thumb { position: absolute; left: 3px; right: 3px; height: var(--log-global-thumb-height); border-radius: 7px; background: #5f5f5f; }
+.log-global-scroll { position: relative; width: 18px; flex: 0 0 18px; margin-right: 8px; background: #1e1e1e; cursor: default; touch-action: none; }
+.log-global-thumb { position: absolute; left: 2px; right: 2px; height: var(--log-global-thumb-height); border-radius: 7px; background: #5f5f5f; }
 .log-global-scroll:hover .log-global-thumb { background: #777; }
 .log-row { display: flex; align-items: center; min-width: max-content; line-height: 1; }
 .log-viewer--wrap .log-row { min-width: 0; }
@@ -112,6 +116,8 @@ button { color: inherit; font: inherit; }
 .log-viewer--light .log-find { background: #f3f3f3; border-color: #d4d4d4; }
 .log-viewer--light .log-find button { background: #ececec; border-color: #d4d4d4; }
 .log-viewer--light .log-find button:hover { background: #e5e5e5; }
+.log-viewer--light .log-find button.log-find__clear { background: transparent; border: 0; }
+.log-viewer--light .log-find button.log-find__clear:hover { background: #e5e5e5; }
 .log-viewer--light .log-find input { color: #333; background: #fff; border-color: #bbb; }
 .log-viewer--light .log-scroll::-webkit-scrollbar-track { background: #fff; }
 .log-viewer--light .log-scroll::-webkit-scrollbar-thumb { background: #b8b8b8; border-color: #fff; }
