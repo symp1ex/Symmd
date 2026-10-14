@@ -83,7 +83,10 @@ button { color: inherit; font: inherit; }
 .log-find__count { flex: 0 0 100px; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .log-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .log-editor-toolbar { display: flex; align-items: center; gap: 12px; padding: 3px 8px; font: 11px "Segoe UI", sans-serif; }
-.log-editor-toolbar button { color: inherit; background: transparent; border: 1px solid #777; cursor: pointer; }
+.log-editor-toolbar label { display: inline-flex; align-items: center; gap: 4px; }
+.log-editor-toolbar button, .log-editor-toolbar select { height: 20px; padding: 1px 6px; color: inherit; font: inherit; background: transparent; border: 1px solid #777; border-radius: 0; cursor: pointer; }
+.log-editor-toolbar select:disabled { opacity: .45; cursor: default; }
+.log-viewer--dark .log-editor-toolbar option { color: #d4d4d4; background: #252526; }
 .log-content { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 .log-editor-window { position: relative; flex: 1; min-height: 0; }
 .log-content .log-scroll { flex: 0 0 28%; border-bottom: 1px solid #555; }
