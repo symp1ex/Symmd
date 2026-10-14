@@ -19,6 +19,8 @@ const logLineLimit = 16 << 10
 const logSearchSize = 1 << 20
 
 type LogInfo struct {
+	Encoding   string `json:"encoding"`
+	BOM        int64  `json:"bom"`
 	Handle     uint64 `json:"handle"`
 	Path       string `json:"path"`
 	Name       string `json:"name"`
@@ -29,6 +31,7 @@ type LogInfo struct {
 }
 
 type LogLine struct {
+	Encoding  string `json:"encoding,omitempty"`
 	Offset    int64  `json:"offset"`
 	Next      int64  `json:"next"`
 	Text      string `json:"text"`
@@ -71,6 +74,7 @@ type logSearch struct {
 }
 
 type logCount struct {
+	encoded       bool
 	id            uint64
 	cancel        context.CancelFunc
 	finished      chan struct{}
@@ -126,10 +130,16 @@ func (s *LogStore) Open(path string) (LogInfo, error) {
 		}
 		return LogInfo{}, errors.New("log is not a regular file")
 	}
+	encoding, bom, err := detectLogEncoding(f, "")
+	if err != nil {
+		f.Close()
+		return LogInfo{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.next++
 	info := LogInfo{Handle: s.next, Path: abs, Name: filepath.Base(abs), Size: stat.Size(), ModifiedNS: stat.ModTime().UnixNano(), Revision: 1}
+	info.Encoding, info.BOM = encoding, bom
 	if s.entries == nil {
 		s.entries = make(map[uint64]*logEntry)
 	}
@@ -178,14 +188,14 @@ func (s *LogStore) Stat(handle uint64) (LogInfo, error) {
 	}
 	changed := false
 	if !os.SameFile(e.identity, stat) {
-		if e.search != nil {
-			e.search.cancel()
-		}
-		if e.count != nil {
-			e.count.cancel()
-		}
+		e.invalidateLogJobs()
 		f, err := openLogFile(e.info.Path)
 		if err != nil {
+			return LogInfo{}, err
+		}
+		_, bom, err := detectLogEncoding(f, e.info.Encoding)
+		if err != nil {
+			f.Close()
 			return LogInfo{}, err
 		}
 		if err := e.file.Close(); err != nil {
@@ -193,17 +203,18 @@ func (s *LogStore) Stat(handle uint64) (LogInfo, error) {
 			return LogInfo{}, err
 		}
 		e.file, e.identity = f, stat
+		e.info.BOM = bom
 		e.info.Revision++
 		changed = true
 	} else if stat.Size() < e.info.Size || (stat.Size() == e.info.Size && stat.ModTime().UnixNano() != e.info.ModifiedNS) {
 		e.info.Revision++
+		e.invalidateLogJobs()
+		_, bom, err := detectLogEncoding(e.file, e.info.Encoding)
+		if err != nil {
+			return LogInfo{}, err
+		}
+		e.info.BOM = bom
 		changed = true
-		if e.search != nil {
-			e.search.cancel()
-		}
-		if e.count != nil {
-			e.count.cancel()
-		}
 	}
 	e.info.Size, e.info.ModifiedNS = stat.Size(), stat.ModTime().UnixNano()
 	e.snapshotSize, e.snapshotNS = stat.Size(), stat.ModTime().UnixNano()
@@ -235,6 +246,9 @@ func (s *LogStore) Read(handle uint64, offset int64, align bool) (LogChunk, erro
 	if offset < 0 {
 		return LogChunk{}, errors.New("negative log offset")
 	}
+	if e.info.Encoding != logUTF8 || e.info.BOM != 0 {
+		return e.readEncodedLines(offset, false, align)
+	}
 	size := e.info.Size
 	if offset > size {
 		offset = size
@@ -257,6 +271,10 @@ func (s *LogStore) Read(handle uint64, offset int64, align bool) (LogChunk, erro
 			offset = offset - back + int64(at) + 1
 		}
 	}
+	offset, err = e.characterStart(offset)
+	if err != nil {
+		return LogChunk{}, err
+	}
 	partial := false
 	if offset > 0 {
 		previous := []byte{0}
@@ -271,6 +289,13 @@ func (s *LogStore) Read(handle uint64, offset int64, align bool) (LogChunk, erro
 		return LogChunk{}, err
 	}
 	data = data[:n]
+	_, consumed, decodeErr := decodeLog(data, logUTF8)
+	if decodeErr != nil {
+		if !errors.Is(decodeErr, io.ErrUnexpectedEOF) || offset+int64(n) == size {
+			return LogChunk{}, fmt.Errorf("decode UTF-8 log at byte %d: %w", offset+int64(consumed), decodeErr)
+		}
+		data = data[:consumed]
+	}
 	position := offset
 	for len(data) > 0 && len(result.Lines) < 120 {
 		newline := bytes.IndexByte(data, '\n')
@@ -287,10 +312,11 @@ func (s *LogStore) Read(handle uint64, offset int64, align bool) (LogChunk, erro
 		truncated := partial || len(visible) > logLineLimit || (newline < 0 && position+int64(end) < size)
 		if len(visible) > logLineLimit {
 			visible = visible[:logLineLimit]
-		}
-		visible = bytes.ToValidUTF8(visible, []byte("�"))
-		if !utf8.Valid(visible) {
-			return LogChunk{}, errors.New("invalid UTF-8 conversion")
+			_, consumed, decodeErr := decodeLog(visible, logUTF8)
+			if decodeErr != nil && !errors.Is(decodeErr, io.ErrUnexpectedEOF) {
+				return LogChunk{}, decodeErr
+			}
+			visible = visible[:consumed]
 		}
 		result.Lines = append(result.Lines, LogLine{Offset: position, Next: position + int64(end), Text: string(visible), Truncated: truncated})
 		position += int64(end)
@@ -317,14 +343,25 @@ func (s *LogStore) ReadBefore(handle uint64, offset int64) (LogChunk, error) {
 	if offset < 0 {
 		return LogChunk{}, errors.New("negative log offset")
 	}
+	if e.info.Encoding != logUTF8 || e.info.BOM != 0 {
+		return e.readEncodedLines(offset, true, false)
+	}
 	if offset > e.info.Size {
 		offset = e.info.Size
+	}
+	offset, err = e.characterStart(offset)
+	if err != nil {
+		return LogChunk{}, err
 	}
 	result := LogChunk{Lines: []LogLine{}, Next: offset, Size: e.info.Size, Revision: e.info.Revision}
 	if offset == 0 {
 		return result, nil
 	}
 	start := max(int64(0), offset-logReadSize)
+	start, err = e.characterStart(start)
+	if err != nil {
+		return LogChunk{}, err
+	}
 	data := make([]byte, offset-start)
 	n, err := e.readLogicalAt(data, start)
 	if err != nil && err != io.EOF {
@@ -332,6 +369,9 @@ func (s *LogStore) ReadBefore(handle uint64, offset int64) (LogChunk, error) {
 	}
 	if n != len(data) {
 		return LogChunk{}, errors.New("log changed while reading")
+	}
+	if _, consumed, err := decodeLog(data, logUTF8); err != nil {
+		return LogChunk{}, fmt.Errorf("decode UTF-8 log at byte %d: %w", start+int64(consumed), err)
 	}
 	for end := len(data); end > 0 && len(result.Lines) < 120; {
 		contentEnd := end
@@ -345,9 +385,12 @@ func (s *LogStore) ReadBefore(handle uint64, offset int64) (LogChunk, error) {
 		clipped := begin == 0 && start > 0
 		if contentEnd-begin > logLineLimit {
 			begin = contentEnd - logLineLimit
+			for begin < contentEnd && !utf8.RuneStart(data[begin]) {
+				begin++
+			}
 			clipped = true
 		}
-		visible := bytes.ToValidUTF8(data[begin:contentEnd], []byte("�"))
+		visible := data[begin:contentEnd]
 		result.Lines = append(result.Lines, LogLine{Offset: start + int64(begin), Next: start + int64(end), Text: string(visible), Truncated: clipped})
 		if clipped || begin == 0 {
 			break
@@ -403,6 +446,7 @@ func (s *LogStore) find(ctx context.Context, handle uint64, query string, offset
 	e.mu.Lock()
 	size := e.info.Size
 	revision := e.info.Revision
+	encoded := e.info.Encoding != logUTF8 || e.info.BOM != 0
 	if e.file == nil {
 		e.mu.Unlock()
 		return -1, errors.New("log handle is closed")
@@ -413,6 +457,9 @@ func (s *LogStore) find(ctx context.Context, handle uint64, query string, offset
 	}
 	if offset > size {
 		offset = size
+	}
+	if encoded {
+		return findEncodedLog(ctx, e, revision, size, offset, previous, matcher, matchBytes)
 	}
 	buffer := make([]byte, logSearchSize+matchBytes-1)
 	if !previous {
@@ -541,6 +588,7 @@ func (s *LogStore) StartCount(handle uint64, query string) (uint64, error) {
 	s.mu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	job := &logCount{id: id, cancel: cancel, finished: make(chan struct{}), matcher: matcher, matchBytes: matchBytes, size: info.Size, revision: info.Revision, ordinalOffset: -1}
+	job.encoded = info.Encoding != logUTF8 || info.BOM != 0
 	e.mu.Lock()
 	if e.file == nil {
 		e.mu.Unlock()
@@ -558,6 +606,21 @@ func (s *LogStore) StartCount(handle uint64, query string) (uint64, error) {
 		for start := int64(0); start < info.Size; start += logSearchSize {
 			if err := ctx.Err(); err != nil {
 				return
+			}
+			if job.encoded {
+				count, _, _, err := scanEncodedLogBlock(ctx, e, info.Revision, info.Size, start, min(info.Size, start+logSearchSize), matcher, matchBytes)
+				job.mu.Lock()
+				if err != nil {
+					job.err, job.done = err.Error(), true
+				} else {
+					job.counts = append(job.counts, count)
+					job.total += count
+				}
+				job.mu.Unlock()
+				if err != nil {
+					return
+				}
+				continue
 			}
 			length := min(int64(len(buffer)), info.Size-start)
 			n, err := readSearchBlock(e, info.Revision, buffer[:length], start)
@@ -617,6 +680,17 @@ func (s *LogStore) PollCount(handle, id uint64, offset int64) (LogCountResult, e
 	}
 	job.mu.Unlock()
 	start := int64(block) * logSearchSize
+	if job.encoded {
+		count, _, _, err := scanEncodedLogBlock(context.Background(), e, job.revision, job.size, start, offset+1, job.matcher, job.matchBytes)
+		if err != nil {
+			return LogCountResult{}, err
+		}
+		result.Ordinal += count
+		job.mu.Lock()
+		job.ordinalOffset, job.ordinal = offset, result.Ordinal
+		job.mu.Unlock()
+		return result, nil
+	}
 	length := min(job.size-start, offset-start+int64(job.matchBytes))
 	buffer := make([]byte, length)
 	n, readErr := readSearchBlock(e, job.revision, buffer, start)

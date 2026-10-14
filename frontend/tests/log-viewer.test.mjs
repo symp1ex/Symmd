@@ -184,11 +184,11 @@ test('Monaco scroll, search selection, clear, and right-edge hit areas stay loca
   assert.doesNotMatch(scroll, /\bseek\(/)
   assert.match(editor, /scroll\.dispose\(\)/)
   assert.match(editor, /modelIndexToRawStringIndex\(rawRef\.current, index\)/)
-  assert.match(editor, /stringIndexToUtf8ByteOffset\(rawRef\.current, rawIndex\)/)
+  assert.match(editor, /logStringIndexToByteOffset\(rawRef\.current, rawIndex, window\.encoding\)/)
   assert.match(editor, /searchQuery \? logTextMatches\(/)
   assert.match(editor, /editor\.setSelection\(range\)/)
   assert.match(editor, /editor\.revealRangeInCenter\(range\)/)
-  assert.match(editor, /\} else \{\s*searchSelectionRef\.current = undefined\s*editor\.setPosition\(start\)/)
+  assert.match(editor, /searchSelectionRef\.current = undefined\s*editor\.setPosition\(start\)/)
   assert.match(editor, /searchQuery && searchRequest !== searchRequestRef\.current/)
   assert.match(editor, /selection\?\.equalsRange\(searchSelectionRef\.current\)/)
   assert.match(viewer, /editorRef\.current\?\.seek\(result\.offset, query\)/)
@@ -198,7 +198,7 @@ test('Monaco scroll, search selection, clear, and right-edge hit areas stay loca
   assert.ok(/\{query && <button[^>]*aria-label="Clear search"[\s\S]*?updateQuery\(''\); findRef\.current\?\.focus\(\)/.test(viewer))
   assert.match(viewer, /searchSerial\.current\+\+[\s\S]*?native\.cancelLogSearch\(info\.handle\)/)
   assert.match(viewer, /editorRef\.current\?\.clearSearchSelection\(\)/)
-  assert.match(viewer, /if \(!query\) \{ setFindOpen\(true\); findRef\.current\?\.focus\(\); return \}/)
+  assert.match(viewer, /if \(!query\) \{ showFind\(\); return \}/)
   const track = css.match(/\.log-global-scroll \{([^}]+)\}/)?.[1]
   const thumb = css.match(/\.log-global-thumb \{([^}]+)\}/)?.[1]
   const resize = css.match(/\.resize-handle--left, \.resize-handle--right \{([^}]+)\}/)?.[1]

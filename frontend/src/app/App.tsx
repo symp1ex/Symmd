@@ -597,7 +597,7 @@ export function App() {
         {activeViewMode === 'split' && <div className="splitter" role="separator" aria-orientation="vertical" onPointerDown={beginSplitterDrag} />}
         {activeViewMode !== 'editor' && <section className="preview-pane" onPointerDownCapture={() => setActivePane('preview')} onFocusCapture={() => setActivePane('preview')}><MarkdownPreview source={previewSource} documentPath={active.path} sourceLine={editorLine} onSourceLine={setPreviewLine} onOpenDocument={(file) => { void addFile(file).catch((error: unknown) => setMessage(error instanceof Error ? error.message : String(error))) }} onError={setMessage} syncEnabled={preferences.previewSync} theme={preferences.theme} zoom={preferences.previewZoom} /></section>}
       </main>
-      <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>{active.log ? `Byte ${(logPosition?.id === active.id ? logPosition.offset : 0).toLocaleString()} / ${active.log.size.toLocaleString()} · Log · UTF-8` : 'Markdown · UTF-8'}</span></footer>
+      <footer className="statusbar"><span>{message || (active.path || 'Unsaved document')}</span><span>{active.log ? `Byte ${(logPosition?.id === active.id ? logPosition.offset : 0).toLocaleString()} / ${active.log.size.toLocaleString()} · Log · ${active.log.encoding}` : 'Markdown · UTF-8'}</span></footer>
     </div>
   )
 }

@@ -30,6 +30,49 @@ export function stringIndexToUtf8ByteOffset(text: string, index: number): number
   return new TextEncoder().encode(text.slice(0, index)).length
 }
 
+export function logStringIndexToByteOffset(text: string, index: number, encoding = 'UTF-8'): number | undefined {
+  if (encoding === 'UTF-8') return stringIndexToUtf8ByteOffset(text, index)
+  if (!Number.isInteger(index) || index < 0 || index > text.length || index < text.length && text.charCodeAt(index) >= 0xdc00 && text.charCodeAt(index) <= 0xdfff) return undefined
+  if (encoding.startsWith('UTF-16')) return index * 2
+  // All supported legacy encodings map one byte to one BMP code point.
+  return index
+}
+
+export function logByteOffsetToStringIndex(text: string, offset: number, encoding = 'UTF-8'): number | undefined {
+  if (encoding === 'UTF-8') return utf8ByteOffsetToStringIndex(text, offset)
+  if (encoding.startsWith('UTF-16')) {
+    const index = offset / 2
+    return logStringIndexToByteOffset(text, index, encoding) !== undefined ? index : undefined
+  }
+  let bytes = 0
+  for (let index = 0; index < text.length;) {
+    if (bytes === offset) return index
+    index += text.codePointAt(index)! > 0xffff ? 2 : 1
+    bytes++
+  }
+  return bytes === offset ? text.length : undefined
+}
+
+const logRepertoires = new Map<string, Set<string>>()
+export function logInsertedBytes(text: string, encoding = 'UTF-8'): number {
+  if (/[\uD800-\uDFFF]/u.test(text)) throw new Error('Inserted text contains an unpaired surrogate')
+  if (encoding === 'UTF-8') return new TextEncoder().encode(text).length
+  if (encoding.startsWith('UTF-16')) return text.length * 2
+  let repertoire = logRepertoires.get(encoding)
+  if (!repertoire) {
+    const decoder = new TextDecoder(encoding === 'CP866' ? 'ibm866' : encoding)
+    repertoire = new Set(Array.from({ length: 256 }, (_, byte) => decoder.decode(Uint8Array.of(byte))))
+    repertoire.delete('\uFFFD')
+    logRepertoires.set(encoding, repertoire)
+  }
+  let bytes = 0
+  for (const character of text) {
+    if (!repertoire.has(character)) throw new Error(`Text contains characters not representable in ${encoding}`)
+    bytes++
+  }
+  return bytes
+}
+
 export function normalizeLogWindowText(text: string): string {
   return text.replace(/\r\n?|\n/g, '\n')
 }
@@ -67,7 +110,7 @@ export interface LogTextMatch { start: number; end: number; selected: boolean }
 export function logTextMatches(line: LogLine, query: string, selectedOffset?: number): LogTextMatch[] {
   if (!query) return []
   const selectedIndex = selectedOffset !== undefined && selectedOffset >= line.offset && selectedOffset < line.next
-    ? utf8ByteOffsetToStringIndex(line.text, selectedOffset - line.offset) : undefined
+    ? logByteOffsetToStringIndex(line.text, selectedOffset - line.offset, line.encoding) : undefined
   const matches: LogTextMatch[] = []
   const pattern = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu')
   for (let match = pattern.exec(line.text); match && matches.length < 256; match = pattern.exec(line.text)) {

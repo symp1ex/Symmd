@@ -1,7 +1,6 @@
 package files
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,9 @@ import (
 const logWindowSize = 2 << 20
 
 type LogWindow struct {
+	Next     int64  `json:"next"`
+	Encoding string `json:"encoding"`
+	Error    string `json:"error,omitempty"`
 	Offset   int64  `json:"offset"`
 	Text     string `json:"text"`
 	Size     int64  `json:"size"`
@@ -49,34 +51,43 @@ func (s *LogStore) ReadWindow(handle uint64, offset int64) (LogWindow, error) {
 	} else {
 		start = 0
 	}
-	for start > 0 {
-		var previous [1]byte
-		if _, err := e.readLogicalAt(previous[:], start); err != nil {
-			return LogWindow{}, err
+	start, err = e.characterStart(start)
+	if err != nil {
+		return LogWindow{}, err
+	}
+	unit := logUnit(e.info.Encoding)
+	if start >= e.info.BOM+unit && start < e.info.Size {
+		pair := make([]byte, unit*2)
+		if n, err := e.readLogicalAt(pair, start-unit); err != nil && err != io.EOF || int64(n) != unit*2 {
+			return LogWindow{}, errors.New("log changed while reading")
 		}
-		if previous[0]&0xc0 != 0x80 {
-			break
+		text, _, err := decodeLog(pair, e.info.Encoding)
+		if err == nil && text == "\r\n" {
+			start -= unit
 		}
-		start--
 	}
 	length := min(int64(logWindowSize), e.info.Size-start)
 	data := make([]byte, length)
 	if n, err := e.readLogicalAt(data, start); err != nil && err != io.EOF || int64(n) != length {
 		return LogWindow{}, fmt.Errorf("read log window: %w", err)
 	}
-	if start+length < e.info.Size {
-		for trimmed := 0; trimmed < 3 && len(data) > 0 && !utf8.Valid(data); trimmed++ {
-			data = data[:len(data)-1]
-		}
-		if len(data) > 0 && data[len(data)-1] == '\r' {
-			data = data[:len(data)-1]
-		}
+	text, consumed, decodeErr := decodeLog(data, e.info.Encoding)
+	if errors.Is(decodeErr, io.ErrUnexpectedEOF) && start+length < e.info.Size {
+		decodeErr = nil
 	}
-	valid := utf8.Valid(data) && !e.conflict
-	if !valid {
-		data = bytes.ToValidUTF8(data, []byte("\uFFFD"))
+	// Do not let Monaco split a CRLF across adjacent windows.
+	if start+int64(consumed) < e.info.Size && len(text) > 0 && text[len(text)-1] == '\r' {
+		text = text[:len(text)-1]
+		consumed -= int(logUnit(e.info.Encoding))
 	}
-	return LogWindow{Offset: start, Text: string(data), Size: e.info.Size, Revision: e.info.Revision, Editable: valid}, nil
+	window := LogWindow{Offset: start, Next: start + int64(consumed), Text: text, Encoding: e.info.Encoding, Size: e.info.Size, Revision: e.info.Revision, Editable: decodeErr == nil && !e.conflict}
+	if decodeErr != nil {
+		window.Error = fmt.Sprintf("Cannot decode %s log at byte %d: %v; window is view-only", e.info.Encoding, start+int64(consumed), decodeErr)
+	}
+	if e.conflict {
+		window.Error = "Log changed outside the editor; reopen before editing"
+	}
+	return window, nil
 }
 
 func (s *LogStore) Replace(handle uint64, start, end int64, inserted string) (LogInfo, error) {
@@ -104,6 +115,16 @@ func (s *LogStore) Replace(handle uint64, start, end int64, inserted string) (Lo
 	if start < 0 || end < start || end > e.info.Size {
 		return LogInfo{}, errors.New("invalid log edit range")
 	}
+	if err := e.editBoundary(start); err != nil {
+		return LogInfo{}, err
+	}
+	if err := e.editBoundary(end); err != nil {
+		return LogInfo{}, err
+	}
+	encoded, err := encodeLog(inserted, e.info.Encoding)
+	if err != nil {
+		return LogInfo{}, err
+	}
 	if start == end && inserted == "" {
 		return e.info, nil
 	}
@@ -121,10 +142,10 @@ func (s *LogStore) Replace(handle uint64, start, end int64, inserted string) (Lo
 		if err != nil {
 			return LogInfo{}, err
 		}
-		if _, err := e.add.WriteString(inserted); err != nil {
+		if _, err := e.add.Write(encoded); err != nil {
 			return LogInfo{}, err
 		}
-		addition = e.newLogNode(logPiece{add: true, offset: at, length: int64(len(inserted))})
+		addition = e.newLogNode(logPiece{add: true, offset: at, length: int64(len(encoded))})
 	}
 	left, tail := e.splitLog(e.root, start)
 	_, right := e.splitLog(tail, end-start)

@@ -194,6 +194,7 @@ func (a *Application) bind() error {
 		{"OpenFile", a.openFile},
 		{"ReadFile", a.readFile},
 		{"OpenLog", a.logs.Open},
+		{"ReopenLogEncoding", a.logs.ReopenEncoding},
 		{"ReadLog", a.logs.Read},
 		{"ReadLogBefore", a.logs.ReadBefore},
 		{"ReadLogWindow", a.logs.ReadWindow},

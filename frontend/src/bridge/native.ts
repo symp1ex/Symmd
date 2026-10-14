@@ -4,12 +4,12 @@ export interface MarkdownFile {
   content: string
   modifiedNs: number
 }
-export interface LogInfo { handle: number; path: string; name: string; size: number; modifiedNs: number; revision: number; dirty: boolean }
-export interface LogLine { offset: number; next: number; text: string; truncated: boolean }
+export interface LogInfo { handle: number; path: string; name: string; size: number; modifiedNs: number; revision: number; dirty: boolean; encoding: string; bom: number }
+export interface LogLine { offset: number; next: number; text: string; truncated: boolean; encoding?: string }
 export interface LogChunk { lines: LogLine[]; next: number; size: number; revision: number }
 export interface LogSearchResult { done: boolean; offset: number; error?: string }
 export interface LogCountResult { done: boolean; total: number; ordinal: number; error?: string }
-export interface LogWindow { offset: number; text: string; size: number; revision: number; editable: boolean }
+export interface LogWindow { offset: number; next: number; text: string; size: number; revision: number; editable: boolean; encoding: string; error?: string }
 export interface LogSaveResult { done: boolean; written: number; total: number; error?: string; info?: LogInfo }
 
 export interface FileState { exists: boolean; modifiedNs: number }
@@ -52,6 +52,7 @@ declare global {
     OpenFile(): Promise<MarkdownFile | null>
     ReadFile(path: string): Promise<MarkdownFile>
     OpenLog(path: string): Promise<LogInfo>
+    ReopenLogEncoding(handle: number, encoding: string, discard: boolean): Promise<LogInfo>
     ReadLog(handle: number, offset: number, align: boolean): Promise<LogChunk>
     ReadLogBefore(handle: number, offset: number): Promise<LogChunk>
     ReadLogWindow(handle: number, offset: number): Promise<LogWindow>
@@ -101,6 +102,7 @@ export const native = {
   openFile: () => window.OpenFile(),
   readFile: (path: string) => window.ReadFile(path),
   openLog: (path: string) => window.OpenLog(path),
+  reopenLogEncoding: (handle: number, encoding: string, discard: boolean) => window.ReopenLogEncoding(handle, encoding, discard),
   readLog: (handle: number, offset: number, align = false) => window.ReadLog(handle, offset, align),
   readLogBefore: (handle: number, offset: number) => window.ReadLogBefore(handle, offset),
   readLogWindow: (handle: number, offset: number) => window.ReadLogWindow(handle, offset),

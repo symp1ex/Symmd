@@ -116,7 +116,12 @@ export interface LogViewerHandle {
 
 interface Props { info: LogInfo; theme: 'dark' | 'light'; fontSize: number; wordWrap: boolean; onInfo(info: LogInfo): void; onPosition(offset: number): void; onError(message: string): void }
 
-export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({ info, theme, fontSize, wordWrap, onInfo, onPosition, onError }, ref) {
+export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({ info, theme, fontSize, wordWrap, onInfo, onPosition, onError: showError }, ref) {
+  const onError = (message: string) => {
+    if (message === 'context canceled' || message === 'search is no longer active' || message === 'count is no longer active') return
+    void native.reportRuntimeEvent(message.startsWith('Cursor or selection') ? 'log-window' : 'frontend-error', `log handle=${info.handle}: ${message}`).catch(() => undefined)
+    showError(message)
+  }
   const [chunk, setChunk] = useState<LogChunk | null>(null)
   const [height, setHeight] = useState(600)
   const [width, setWidth] = useState(800)
@@ -134,12 +139,16 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   const [endSelected, setEndSelected] = useState(false)
   const [navigationOpen, setNavigationOpen] = useState(false)
   const [editorPosition, setEditorPosition] = useState(0)
+  const [reopening, setReopening] = useState(false)
+  const reopeningRef = useRef(false)
   const editorRef = useRef<LogEditorWindowHandle>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const findRef = useRef<HTMLInputElement>(null)
   const serial = useRef(0)
   const searchSerial = useRef(0)
+  const searchOriginRef = useRef(0)
+  const findTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const countIDRef = useRef(0)
   const countSizeRef = useRef(info.size)
   const matchRef = useRef<number | undefined>(undefined)
@@ -275,6 +284,9 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
         if (!active) return
         if (next.revision < infoRef.current.revision || (next.revision === infoRef.current.revision && next.size < infoRef.current.size)) return
         if (next.revision !== infoRef.current.revision) {
+          searchSerial.current++
+          editorRef.current?.clearSearchSelection()
+          matchRef.current = undefined
           infoRef.current = next
           previousLines.current = []
           chunkRef.current = null
@@ -302,12 +314,21 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     return () => { active = false; window.clearInterval(timer) }
   }, [info.handle])
 
-  const find = async (previous: boolean) => {
-    if (!query) { setFindOpen(true); findRef.current?.focus(); return }
+  const showFind = () => {
+    searchOriginRef.current = editorRef.current?.cursorOffset() ?? info.bom
+    setFindOpen(true)
+    requestAnimationFrame(() => findRef.current?.focus())
+  }
+
+  const find = async (previous: boolean, fromOrigin = false) => {
+    if (findTimerRef.current) { clearTimeout(findTimerRef.current); findTimerRef.current = undefined }
+    if (!query) { showFind(); return }
     const request = ++searchSerial.current
-    const start = matchOffset === undefined ? visibleOffsetRef.current : matchOffset + (previous ? 0 : 1)
+    const start = fromOrigin || matchRef.current === undefined ? searchOriginRef.current : matchRef.current + (previous ? 0 : 1)
     setStatus('')
     try {
+      await editorRef.current?.flush()
+      if (request !== searchSerial.current) return
       const id = await native.findLog(info.handle, query, start, previous)
       if (request !== searchSerial.current) { void native.cancelLogSearch(info.handle, id).catch(() => undefined); return }
       let result = await native.pollLogSearch(info.handle, id)
@@ -341,6 +362,20 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     setStatus('')
   }
 
+  const closeFind = () => {
+    searchSerial.current++
+    if (findTimerRef.current) clearTimeout(findTimerRef.current)
+    void native.cancelLogSearch(info.handle).catch(() => undefined)
+    editorRef.current?.clearSearchSelection()
+    setFindOpen(false)
+    editorRef.current?.focus()
+  }
+
+  useEffect(() => {
+    if (findOpen && query) findTimerRef.current = setTimeout(() => { findTimerRef.current = undefined; void find(false, true) }, 220)
+    return () => { if (findTimerRef.current) clearTimeout(findTimerRef.current) }
+  }, [findOpen, query, info.handle])
+
   useEffect(() => {
     let cancelled = false
     let id = 0
@@ -360,11 +395,16 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
             const result = await native.pollLogCount(info.handle, id, selected ?? -1)
             if (cancelled) return
             if (selected === matchRef.current) { setCountResult(result); setCountOffset(selected) }
+            if (result.error) onError(result.error)
             if (result.done || result.error) return
             await new Promise((resolve) => window.setTimeout(resolve, 150))
           }
         }).catch((error: unknown) => {
-          if (!cancelled) setCountResult({ done: true, total: 0, ordinal: 0, error: error instanceof Error ? error.message : String(error) })
+          if (!cancelled) {
+            const message = error instanceof Error ? error.message : String(error)
+            setCountResult({ done: true, total: 0, ordinal: 0, error: message })
+            onError(message)
+          }
         })
       }, 250)
       return () => {
@@ -393,7 +433,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
   }, [countID, matchOffset, info.handle])
 
   useImperativeHandle(ref, () => ({
-    showFind: () => { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()) },
+    showFind,
     findNext: (previous) => { void find(previous) },
     flush: () => editorRef.current?.flush() ?? Promise.resolve(),
     setSaving: (saving) => editorRef.current?.setSaving(saving),
@@ -480,14 +520,44 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
     return Math.max(0, Math.min(1, (clientY - track.getBoundingClientRect().top - grab) / travel))
   }
 
+  const reopenEncoding = async (encoding: string) => {
+    if (reopeningRef.current) return
+    reopeningRef.current = true
+    setReopening(true)
+    try {
+      let failedEdit = false
+      try { await editorRef.current?.flush() } catch { failedEdit = true /* Already reported by the edit queue. */ }
+      // The flushed state includes all local edits. Stat can reject a replaced
+      // file's conflicting BOM; reopening must still allow selecting its encoding.
+      // The backend independently enforces dirty and active-save guards.
+      const current = infoRef.current
+      if ((current.dirty || failedEdit) && !await native.confirmDiscard(current.name)) return
+      editorRef.current?.setSaving(true)
+      const next = await native.reopenLogEncoding(info.handle, encoding, current.dirty)
+      searchSerial.current++
+      editorRef.current?.clearSearchSelection()
+      infoRef.current = next
+      onInfo(next)
+      setMatchOffset(undefined)
+      setCountVersion((version) => version + 1)
+      await editorRef.current?.seek(next.bom)
+      await load(next.bom)
+    } catch (error) { onError(error instanceof Error ? error.message : String(error)) }
+    finally { editorRef.current?.setSaving(false); reopeningRef.current = false; setReopening(false) }
+  }
+
+  useEffect(() => {
+    void native.reportRuntimeEvent('log-encoding', `handle=${info.handle} encoding=${info.encoding} bom=${info.bom}`).catch(() => undefined)
+  }, [info.handle, info.encoding, info.bom])
+
   return <div className={`log-viewer log-viewer--${theme}${wordWrap ? ' log-viewer--wrap' : ''}`} style={{ fontSize, '--log-gutter-width': `${gutterWidth}px`, '--log-top-padding': `${logTopPadding}px`, '--log-text-padding': `${logTextPadding}px`, '--log-global-thumb-height': `${globalThumbHeight}px` } as CSSProperties}>
-    <div className="log-editor-toolbar"><button type="button" onClick={() => setNavigationOpen((open) => !open)}>{navigationOpen ? 'Hide navigation' : 'Show navigation'}</button><span>Select All applies to the current 2 MiB editor window</span></div>
-    {findOpen && <div className="log-find" onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setFindOpen(false); scrollRef.current?.focus() } }}>
+    <div className="log-editor-toolbar"><button type="button" onClick={() => setNavigationOpen((open) => !open)}>{navigationOpen ? 'Hide navigation' : 'Show navigation'}</button><label title="Detection without a BOM is heuristic. Select to reopen; unsaved changes require confirmation.">Encoding <select aria-label="Log encoding" value={info.encoding} disabled={reopening} onChange={(event) => { void reopenEncoding(event.target.value) }}>{['UTF-8', 'UTF-16 LE', 'UTF-16 BE', 'Windows-1251', 'Windows-1252', 'CP866', 'KOI8-R'].map((encoding) => <option key={encoding}>{encoding}</option>)}</select></label><span>Select All applies to the current 2 MiB editor window</span></div>
+    {findOpen && <div className="log-find" onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeFind() } }}>
       <span className="log-find__field"><input ref={findRef} aria-label="Find in log" value={query} onChange={(event) => updateQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void find(event.shiftKey) }} />{query && <button type="button" className="log-find__clear" aria-label="Clear search" title="Clear search" onClick={() => { updateQuery(''); findRef.current?.focus() }}>×</button>}</span>
       <span className="log-find__count" title={countResult?.error}>{countResult?.error ? 'Error' : status || <>{matchOffset === undefined ? 0 : countOffset === matchOffset ? countResult?.ordinal || '…' : '…'} / {countResult?.done ? countResult.total : '…'}</>}</span>
       <button type="button" className="log-find__icon" aria-label="Next match" title="Next match" onClick={() => void find(false)}>↓</button>
       <button type="button" className="log-find__icon" aria-label="Previous match" title="Previous match" onClick={() => void find(true)}>↑</button>
-      <button type="button" className="log-find__icon" aria-label="Close find" title="Close find" onClick={() => { setFindOpen(false); scrollRef.current?.focus() }}>×</button>
+      <button type="button" className="log-find__icon" aria-label="Close find" title="Close find" onClick={closeFind}>×</button>
     </div>}
     <div className="log-body">
     <div className="log-content">
@@ -521,7 +591,7 @@ export const LogViewer = forwardRef<LogViewerHandle, Props>(function LogViewer({
         </div>
       </div>
     </div>
-    <LogEditorWindow ref={editorRef} info={info} theme={theme} fontSize={fontSize} wordWrap={wordWrap} onInfo={(next) => { if (next.revision !== infoRef.current.revision) searchSerial.current++; infoRef.current = next; setMatchOffset(undefined); onInfo(next) }} onPosition={(offset) => { setEditorPosition(offset); onPosition(offset) }} onPendingEdit={() => onInfo({ ...infoRef.current, dirty: true })} onError={onError} />
+    <LogEditorWindow ref={editorRef} info={info} theme={theme} fontSize={fontSize} wordWrap={wordWrap} onInfo={(next) => { if (next.revision !== infoRef.current.revision) { searchSerial.current++; editorRef.current?.clearSearchSelection(); setMatchOffset(undefined); matchRef.current = undefined }; infoRef.current = next; onInfo(next) }} onPosition={(offset) => { setEditorPosition(offset); onPosition(offset) }} onPendingEdit={() => { searchSerial.current++; editorRef.current?.clearSearchSelection(); setMatchOffset(undefined); matchRef.current = undefined; onInfo({ ...infoRef.current, dirty: true }) }} onError={onError} />
     </div>
     <div ref={trackRef} className="log-global-scroll" role="scrollbar" aria-label="Log position" aria-orientation="vertical" aria-valuemin={0} aria-valuemax={info.size} aria-valuenow={Math.round(position * info.size)} tabIndex={0} onPointerDown={(event) => {
       if (event.button !== 0) return
