@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import { createServer } from 'vite'
 
 let server
@@ -169,6 +170,43 @@ test('search selection boundaries follow the actual Unicode match in a raw edito
     assert.equal(rawStringIndexToModelIndex(text, match.end), normalizeLogWindowText(text).indexOf(fragment) + fragment.length)
   }
   assert.equal(logTextMatches({ ...line, text: text.slice(0, -1), next: line.next - 1 }, 'end', base + stringIndexToUtf8ByteOffset(text, text.indexOf('end'))).some((item) => item.selected), false)
+})
+
+test('find navigation wraps in both directions and reports only a genuinely missing match', async () => {
+  const source = ts.createSourceFile('LogViewer.tsx', readFileSync(new URL('../src/log/LogViewer.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  let declaration
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'find') declaration = node
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  assert.ok(declaration)
+  const code = ts.transpileModule(`const ${declaration.getText(source)}`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
+  const makeFind = new Function('native', 'info', 'query', 'findTimerRef', 'showFind', 'searchSerial', 'searchOriginRef', 'infoRef', 'setStatus', 'setMatchOffset', 'matchRef', 'load', 'editorRef', 'onError', 'window', `${code}\nreturn find`)
+  const run = async (previous, matchOffset, size, results, origin = 0, fromOrigin = false) => {
+    const calls = []
+    const selected = []
+    let flushes = 0
+    let status
+    const native = {
+      findLog: async (_handle, _query, offset, backwards) => { assert.equal(flushes, 1); calls.push([offset, backwards]); return calls.length },
+      pollLogSearch: async (_handle, id) => ({ done: true, offset: results[id - 1] }),
+      cancelLogSearch: async () => {},
+    }
+    const find = makeFind(native, { handle: 1 }, 'k', { current: undefined }, () => {}, { current: 0 }, { current: origin }, { current: { size } }, (value) => { status = value }, (value) => selected.push(value), { current: matchOffset }, async () => {}, { current: { flush: async () => { flushes++ }, seek: async (offset) => selected.push(offset) } }, (error) => { throw error }, {})
+    await find(previous, fromOrigin)
+    return { calls, selected, status }
+  }
+  assert.deepEqual(await run(true, 10, 100, [-1, 80]), { calls: [[10, true], [100, true]], selected: [80, 80], status: '' })
+  assert.deepEqual(await run(false, 80, 100, [-1, 10]), { calls: [[81, false], [0, false]], selected: [10, 10], status: '' })
+  assert.deepEqual(await run(false, 10, 100, [20]), { calls: [[11, false]], selected: [20, 20], status: '' })
+  assert.deepEqual(await run(true, 10, 100, [-1, 10]), { calls: [[10, true], [100, true]], selected: [10, 10], status: '' })
+  assert.deepEqual(await run(false, 80, 100, [-1, -1]), { calls: [[81, false], [0, false]], selected: [], status: 'No match' })
+  assert.deepEqual(await run(false, undefined, 100, [-1]), { calls: [[0, false]], selected: [], status: 'No match' })
+  assert.deepEqual(await run(false, undefined, 100, [-1, 10], 70), { calls: [[70, false], [0, false]], selected: [10, 10], status: '' })
+  assert.deepEqual(await run(true, undefined, 100, [-1, 80], 20), { calls: [[20, true], [100, true]], selected: [80, 80], status: '' })
+  assert.deepEqual(await run(false, 80, 100, [30], 20, true), { calls: [[20, false]], selected: [30, 30], status: '' })
+  assert.deepEqual(await run(true, undefined, 100, [-1], 100), { calls: [[100, true]], selected: [], status: 'No match' })
 })
 
 test('Monaco scroll, search selection, clear, and right-edge hit areas stay locally wired', () => {

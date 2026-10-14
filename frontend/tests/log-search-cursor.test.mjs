@@ -79,7 +79,10 @@ test('debounced global search retains the cursor origin while typing and uses ba
     resultOffset = -1
     ref.current.findNext(false)
     await wait()
-    assert.equal(searches.length, 5, 'no automatic wraparound request')
+    assert.equal(searches.length, 6, 'a missing forward match retries from the beginning')
+    assert.deepEqual(searches.slice(4), [[7, 'ab', (9 << 20) + 1, false], [7, 'ab', 0, false]])
+    tree = harness.render(LogViewer, props, ref)
+    assert.match(JSON.stringify(tree), /No match/)
     let resolveStale
     native.pollLogSearch = async () => new Promise((resolve) => { resolveStale = resolve })
     ref.current.findNext(false)
