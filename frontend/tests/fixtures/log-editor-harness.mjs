@@ -1,5 +1,9 @@
 // A public-API Monaco double. Tests execute the component's actual listeners,
 // async queue and window loader, rather than matching their source text.
+import { CursorMoveCommands } from 'monaco-editor/esm/vs/editor/common/cursor/cursorMoveCommands.js'
+import { Range } from 'monaco-editor/esm/vs/editor/common/core/range.js'
+import { Selection } from 'monaco-editor/esm/vs/editor/common/core/selection.js'
+export { Range, Selection }
 export const runtime = { effects: [], cleanups: [], refs: [], index: 0, instance: undefined }
 export function forwardRef(component) { return component }
 export function useRef(value) { const index = runtime.index++; return runtime.refs[index] ??= { current: value } }
@@ -11,19 +15,6 @@ export function mount(host) {
 export function start() { runtime.cleanups = runtime.effects.map((effect) => effect()).filter(Boolean) }
 export function dispose() { for (const cleanup of runtime.cleanups) cleanup() }
 
-export class Range {
-  constructor(startLineNumber, startColumn, endLineNumber, endColumn) { Object.assign(this, { startLineNumber, startColumn, endLineNumber, endColumn }) }
-  static fromPositions(start, end = start) { return new Range(start.lineNumber, start.column, end.lineNumber, end.column) }
-  getStartPosition() { return { lineNumber: this.startLineNumber, column: this.startColumn } }
-  getEndPosition() { return { lineNumber: this.endLineNumber, column: this.endColumn } }
-  equalsRange(other) { return !!other && ['startLineNumber', 'startColumn', 'endLineNumber', 'endColumn'].every((key) => this[key] === other[key]) }
-  isEmpty() { return this.startLineNumber === this.endLineNumber && this.startColumn === this.endColumn }
-}
-export class Selection extends Range {
-  static fromPositions(start, end = start) { const selection = new Selection(start.lineNumber, start.column, end.lineNumber, end.column); selection.anchor = start; selection.active = end; return selection }
-  getSelectionStart() { return this.anchor }
-  getPosition() { return this.active }
-}
 export function editorTheme(theme) { return theme }
 export const editor = {
   EditorOption: { readOnly: 'readOnly' }, ScrollType: { Immediate: 1 }, EndOfLineSequence: { LF: 0 },
@@ -65,7 +56,15 @@ export const editor = {
       setSelection(selection) { this.selection = selection instanceof Selection ? selection : Selection.fromPositions(selection.getStartPosition(), selection.getEndPosition()); this.position = this.selection.getPosition(); callbacks.cursor?.({ position: this.position }) },
       revealRangeInCenter() { this.centered++ }, revealPositionInCenter() { this.centered++ },
       updateOptions(options) { if ('readOnly' in options) this.readOnly = options.readOnly },
-      getOption() { return this.readOnly }, focus() { this.focused++ }, trigger() {}, dispose() {},
+      getOption() { return this.readOnly }, focus() { this.focused++ },
+      trigger(_source, action) {
+        if (action !== 'editor.action.selectAll') throw new Error(`Unsupported action: ${action}`)
+        // Use the installed Monaco implementation: anchor at model start, active
+        // end at model end, no reveal/scroll. Selection is current before cursor events.
+        const state = CursorMoveCommands.selectAll({ model })
+        this.setSelection(Selection.fromPositions(state.modelState.selection.getSelectionStart(), state.modelState.position))
+      },
+      dispose() {},
       scrollTo(top, left = this.left) { this.top = top; this.left = left; callbacks.scroll?.({ scrollTopChanged: true }) },
       change(start, length, text) {
         value = value.slice(0, start) + text + value.slice(start + length)
@@ -74,7 +73,7 @@ export const editor = {
     }
     const model = {
       getValue: () => value,
-      setValue(text) { value = text.replace(/\r\n?/g, '\n'); callbacks.content?.({ changes: [] }); callbacks.scroll?.({ scrollTopChanged: true }) },
+      setValue(text) { value = text.replace(/\r\n?/g, '\n'); callbacks.content?.({ changes: [] }); instance.setPosition({ lineNumber: 1, column: 1 }); callbacks.scroll?.({ scrollTopChanged: true }) },
       setEOL() {}, getValueLength: () => value.length,
       getLineCount: () => value.split('\n').length,
       getLineMaxColumn: (line) => (value.split('\n')[line - 1]?.length ?? 0) + 1,

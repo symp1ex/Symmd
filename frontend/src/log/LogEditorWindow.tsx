@@ -242,6 +242,8 @@ export const LogEditorWindow = forwardRef<LogEditorWindowHandle, Props>(function
       const { index, logical } = offset
       lastScrollPositionRef.current = undefined
       callbacksRef.current.onPosition(logical)
+      // A selection ending at a window boundary is not cursor navigation.
+      if (!editor.getSelection()?.isEmpty()) return
       if (textRef.current.length > 65536 && ((index > textRef.current.length - 2048 && window.offset + windowBytesRef.current < window.size) || (index < 2048 && window.offset > 0))) {
         void seek(logical).catch((error: unknown) => callbacksRef.current.onError(error instanceof Error ? error.message : String(error)))
       }
